@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use tracing_subscriber::{self, EnvFilter};
 mod error;
 mod install;
+mod os_capture;
 mod rbx_studio_server;
 
 /// Simple MCP proxy for Roblox Studio

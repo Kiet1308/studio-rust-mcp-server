@@ -1,4 +1,5 @@
 local Main = script:FindFirstAncestor("MCPStudioPlugin")
+local LuauCompile = require(Main.Utils.LuauCompile)
 local Types = require(Main.Types)
 
 local HttpService = game:GetService("HttpService")
@@ -80,7 +81,7 @@ local function runCodeWithOutput(command: string): string
 	end
 
 	local function executeCode()
-		local chunk = loadstring(command) :: any
+		local chunk = LuauCompile.compile(command, script)
 		local chunkfenv = getfenv(chunk)
 
 		local oldPrint = print

@@ -1,6 +1,6 @@
 local Main = script:FindFirstAncestor("MCPStudioPlugin")
-local ConsoleOutput = require(Main.Utils.ConsoleOutput)
 local GlobalVariables = require(Main.Utils.GlobalVariables)
+local InstanceIdentity = require(Main.Utils.InstanceIdentity)
 local StartStopPlay = require(Main.Tools.StartStopPlay)
 local Types = require(Main.Types)
 
@@ -106,7 +106,8 @@ end
 local function runScriptInPlayMode(args: Types.RunScriptInPlayModeArgs): string?
 	injectTestScript(args)
 
-	ConsoleOutput.outputMessage = ""
+	-- Let the booting play DataModels know which Studio window they belong to.
+	InstanceIdentity.markPlayOwner(GlobalVariables.instanceId)
 	local success, result = pcall(function()
 		if args.mode == "start_play" then
 			GlobalVariables.studioMode = "start_play"

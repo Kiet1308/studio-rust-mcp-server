@@ -8,3 +8,7 @@ output/
 ddg.html
 archtest.html
 upstream_server.rs
+*.png
+*.jpg
+.dev-server.log
+*.rbxlx.lock

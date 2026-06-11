@@ -34,12 +34,38 @@ The setup process also contains a small plugin installation and Claude Desktop c
 
 ### Included tools
 
-- **run_code** - Runs a command in Roblox Studio and returns the printed output. Can be used to both make changes and retrieve information.
+- **run_code** - Runs a command in Roblox Studio and returns the printed output. Can be used to both make changes and retrieve information. Accepts `context` = `edit` (default), `server`, or `client` to run inside a live play session.
 - **insert_model** - Inserts a model from the Roblox Creator Store into the workspace. Returns the inserted model name.
-- **get_console_output** - Gets the console output from Roblox Studio.
+- **get_console_output** - Gets the console output from Roblox Studio as structured entries (`seq`, `ts`, `level`, `message`). Accepts `context` = `edit`, `server`, or `client`, `since_seq` for incremental reads, `level` to filter (e.g. only errors), and `limit`.
+- **get_errors** - Returns script errors captured via `ScriptContext.Error`, with the full stack trace and the erroring script's path — the fast way to check "did anything break?" after exercising a feature. Supports `since_seq` like get_console_output.
 - **start_stop_play** - Starts or stops play mode or runs the server.
 - **run_script_in_play_mode** - Runs a script in play mode and automatically stops play after the script finishes or times out. Returns structured output including logs, errors, and duration.
 - **get_studio_mode** - Gets the current Studio mode (`start_play`, `run_server`, or `stop`).
+
+### Play-testing tools
+
+These let an AI agent test a game end to end like a real player: see the screen, find UI, click, type, and move the character. Input and screenshots require the Studio window to be visible (not minimized).
+
+- **take_screenshot** - Captures what the game is rendering and returns it as an image. In play mode this is exactly what the player sees (3D world plus UI). `ui_path` crops the capture to a single ScreenGui/GuiObject; `isolate=true` hides all other UI during the capture. Falls back to an OS-level capture of the Studio window when the in-engine capture is unavailable.
+- **get_ui_tree** - Returns the UI hierarchy (live PlayerGui during play) as a compact JSON tree with names, classes, on-screen rects, text, and clickable/editable flags.
+- **click_ui** - Clicks through the engine's real input pipeline, so GuiButton handlers and InputBegan fire exactly as for a real player. Targets an element by path or an explicit viewport position.
+- **click_object** - Clicks a 3D object (Part or Model) by workspace path: its position is projected to the screen and clicked like a real mouse click, so ClickDetectors and raycast-based games respond. Reports when the object is off screen or hidden behind something instead of clicking blindly.
+- **mouse_move** - Moves the pointer without clicking, for hover effects (MouseEnter, tooltips) and positioning.
+- **mouse_drag** - Drags like a real player: button down, a smooth stream of move events, button up — for aiming, sliders, and drag-and-drop. While the game locks the cursor (right-button camera drags), movement is automatically delivered as deltas, so camera rotation works too.
+- **input_sequence** - Runs several input steps (click/click_object/drag/move/key/text/wait) in one call with precise timing, for combos that per-call latency would break.
+- **set_camera** - Positions the camera (`set`, `look_at`, `get`, `restore`) — frame a specific 3D area before take_screenshot, or bring an off-screen object into view before click_object.
+- **send_key** - Presses keyboard keys through the real input pipeline; the default controls respond (`W` walks, `Space` jumps). Supports tap, hold for a duration, press, and release.
+- **send_text** - Types into a TextBox (optionally focusing it first and pressing Enter after) and returns the resulting text.
+- **control_character** - High-level character control: `move_to` a world position, `walk` in a direction, `jump`, `stop`, or `get_state` (position, health, velocity, camera).
+- **wait_for** - Polls a Luau condition until it becomes truthy or times out; the reliable way to wait for game state (character spawned, UI appeared) in end-to-end tests.
+- **list_studio_instances** - Lists every open Studio window connected to the server (place name, placeId, live DataModels).
+- **select_studio_instance** - Chooses which Studio window subsequent tools operate on, by place name or placeId. With a single window open no selection is needed; with several open, tools ask for a selection instead of guessing. Selection is per MCP client, so two AI clients can drive two different Studio windows at once. (Limitation: two windows with the same unsaved place name are indistinguishable.)
+
+#### How it works
+
+Every Studio DataModel (edit, play server, play client) runs its own plugin instance. The edit and server instances long-poll the MCP server over HTTP with a `role` tag, so commands can be routed to a specific context. The play client cannot use HttpService, so the server instance polls on the client's behalf and relays commands and responses through a chunked RemoteEvent bridge between the two plugin VMs.
+
+Screenshots use `CaptureService:CaptureScreenshot()` on the rendering DataModel; the resulting temporary contentId is read back as pixels on the edit DataModel (`AssetService:CreateEditableImageAsync` + `ReadPixelsBuffer`), so multi-MB pixel data never crosses the relay. Input uses `UserInputService:CreateVirtualInput()`, which drives the engine's real input pipeline: `SendKey`/`SendMouseButton`/`SendTextInput` plus `SendMousePosition` for absolute pointer movement and `SendMouseDelta` for relative movement while the cursor is locked. The cursor is always moved before a click, because ClickDetectors and hover logic follow the engine's tracked cursor position rather than the position embedded in a button event.
 
 ## Setup
 

@@ -1,0 +1,43 @@
+<roblox version="4">
+	<Item class="Workspace" referent="RBX0">
+		<Properties>
+			<string name="Name">Workspace</string>
+		</Properties>
+		<Item class="Part" referent="RBX1">
+			<Properties>
+				<string name="Name">Baseplate</string>
+				<bool name="Anchored">true</bool>
+				<CoordinateFrame name="CFrame">
+					<X>0</X><Y>-8</Y><Z>0</Z>
+					<R00>1</R00><R01>0</R01><R02>0</R02>
+					<R10>0</R10><R11>1</R11><R12>0</R12>
+					<R20>0</R20><R21>0</R21><R22>1</R22>
+				</CoordinateFrame>
+				<Vector3 name="size">
+					<X>512</X><Y>16</Y><Z>512</Z>
+				</Vector3>
+				<Color3uint8 name="Color3uint8">4278584838</Color3uint8>
+			</Properties>
+		</Item>
+		<Item class="SpawnLocation" referent="RBX2">
+			<Properties>
+				<string name="Name">SpawnLocation</string>
+				<bool name="Anchored">true</bool>
+				<CoordinateFrame name="CFrame">
+					<X>0</X><Y>0.5</Y><Z>0</Z>
+					<R00>1</R00><R01>0</R01><R02>0</R02>
+					<R10>0</R10><R11>1</R11><R12>0</R12>
+					<R20>0</R20><R21>0</R21><R22>1</R22>
+				</CoordinateFrame>
+				<Vector3 name="size">
+					<X>12</X><Y>1</Y><Z>12</Z>
+				</Vector3>
+			</Properties>
+		</Item>
+	</Item>
+	<Item class="Lighting" referent="RBX3">
+		<Properties>
+			<string name="Name">Lighting</string>
+		</Properties>
+	</Item>
+</roblox>

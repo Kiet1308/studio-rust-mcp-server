@@ -15,12 +15,26 @@ fn get_message(successes: String) -> String {
 Please restart Studio and MCP clients to apply the changes.
 
 Tools included:
-- run_code
+- run_code (context: edit, server, or client)
 - insert_model
-- get_console_output
+- get_console_output (incremental via since_seq, level filter)
+- get_errors (script errors with stack traces)
 - start_stop_play
 - run_script_in_play_mode
 - get_studio_mode
+- take_screenshot (viewport or a single UI element)
+- get_ui_tree
+- click_ui
+- click_object (3D Parts/Models)
+- mouse_move / mouse_drag (hover, aiming, drag-and-drop)
+- input_sequence (timed input combos in one call)
+- set_camera
+- send_key
+- send_text
+- control_character
+- wait_for
+- list_studio_instances
+- select_studio_instance
 
 MCP Clients set up:
 {successes}

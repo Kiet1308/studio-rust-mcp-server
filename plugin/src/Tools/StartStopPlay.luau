@@ -1,9 +1,9 @@
 local Main = script:FindFirstAncestor("MCPStudioPlugin")
 local Types = require(Main.Types)
 local StudioTestService = game:GetService("StudioTestService")
-local ConsoleOutput = require(Main.Utils.ConsoleOutput)
 local GameStopUtil = require(Main.Utils.GameStopUtil)
 local GlobalVariables = require(Main.Utils.GlobalVariables)
+local InstanceIdentity = require(Main.Utils.InstanceIdentity)
 
 -- If callback finishes before timeout, returns callback result, otherwise returns timeoutResult
 -- StudioTestService:ExecutePlayModeAsync({}) may error "Previous call to start play session has not been completed" immediately(still yielding) or yield until stop.
@@ -39,8 +39,9 @@ local function callWithTimeout(callback: () -> any, timeout: number, timeoutResu
 end
 
 local function startPlay(): string?
-	ConsoleOutput.outputMessage = ""
 	GlobalVariables.studioMode = "start_play"
+	-- Let the booting play DataModels know which Studio window they belong to.
+	InstanceIdentity.markPlayOwner(GlobalVariables.instanceId)
 	local result, isTimeout = callWithTimeout(function()
 		return StudioTestService:ExecutePlayModeAsync({})
 	end, 0.1, "Started play")
@@ -59,6 +60,8 @@ end
 
 local function runServer(): string?
 	GlobalVariables.studioMode = "run_server"
+	-- Let the booting run-mode DataModel know which Studio window it belongs to.
+	InstanceIdentity.markPlayOwner(GlobalVariables.instanceId)
 	local result, isTimeout = callWithTimeout(function()
 		return StudioTestService:ExecuteRunModeAsync({})
 	end, 0.1, "Ran server")
