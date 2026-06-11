@@ -106,17 +106,30 @@ end
 local function runScriptInPlayMode(args: Types.RunScriptInPlayModeArgs): string?
 	injectTestScript(args)
 
-	-- Let the booting play DataModels know which Studio window they belong to.
-	InstanceIdentity.markPlayOwner(GlobalVariables.instanceId)
-	local success, result = pcall(function()
-		if args.mode == "start_play" then
-			GlobalVariables.studioMode = "start_play"
-			return StudioTestService:ExecutePlayModeAsync({})
-		else
-			GlobalVariables.studioMode = "run_server"
-			return StudioTestService:ExecuteRunModeAsync({})
+	-- The previous session blocks new starts for a few seconds while Studio
+	-- tears it down; retry instead of failing on that transient error.
+	local deadline = os.clock() + 10
+	local success, result
+	while true do
+		-- Let the booting play DataModels know which Studio window they belong to.
+		InstanceIdentity.markPlayOwner(GlobalVariables.instanceId)
+		success, result = pcall(function()
+			if args.mode == "start_play" then
+				GlobalVariables.studioMode = "start_play"
+				return StudioTestService:ExecutePlayModeAsync({})
+			else
+				GlobalVariables.studioMode = "run_server"
+				return StudioTestService:ExecuteRunModeAsync({})
+			end
+		end)
+		if success
+			or os.clock() >= deadline
+			or not string.find(tostring(result), "Previous call", 1, true)
+		then
+			break
 		end
-	end)
+		task.wait(0.5)
+	end
 
 	GlobalVariables.studioMode = "stop"
 	removeTestScript()
