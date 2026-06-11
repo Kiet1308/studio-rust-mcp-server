@@ -1,13 +1,10 @@
-> [!WARNING]
-> ### This MCP Server is no longer being actively developed
-> 
-> We’ve shifted ongoing engineering investment to the [built-in MCP Server included with Roblox Studio](https://create.roblox.com/docs/studio/mcp), which we recommend as the best way to connect external AI tools going forward.
+> [!NOTE]
+> ### This is an actively developed fork
 >
->This server’s source code and previous releases will remain available here for reference and existing workflows.
-
+> This repository is a fork of [Roblox/studio-rust-mcp-server](https://github.com/Roblox/studio-rust-mcp-server) (no longer actively developed by Roblox). The fork adds a large set of new capabilities — full end-to-end play-testing (screenshots, UI inspection and search, real mouse/keyboard input, character control, camera control, ProximityPrompt discovery), multi-Studio-window routing, structured console/error reading, and OS-level Studio window management — and will continue to be developed.
 
 # Quick Setup
-1. Download and Run the server: [Windows](https://github.com/Roblox/studio-rust-mcp-server/releases/latest/download/rbx-studio-mcp.exe) or [macOS](https://github.com/Roblox/studio-rust-mcp-server/releases/latest/download/macOS-rbx-studio-mcp.zip)
+1. Download and Run the server: [Windows](https://github.com/Kiet1308/studio-rust-mcp-server/releases/latest/download/rbx-studio-mcp.exe) (macOS: build from source, see below)
 2. Restart AI Client (Claude, Cursor, etc) and Roblox Studio
 3. Done!
 
