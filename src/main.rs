@@ -1,10 +1,8 @@
-use axum::routing::{get, post};
 use clap::Parser;
 use color_eyre::eyre::Result;
 use rbx_studio_server::*;
 use rmcp::ServiceExt;
 use std::io;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing_subscriber::{self, EnvFilter};
@@ -41,33 +39,9 @@ async fn main() -> Result<()> {
 
     let server_state = Arc::new(Mutex::new(AppState::new()));
 
-    let (close_tx, close_rx) = tokio::sync::oneshot::channel();
+    let (close_tx, close_rx) = tokio::sync::watch::channel(false);
 
-    let listener =
-        tokio::net::TcpListener::bind((Ipv4Addr::new(127, 0, 0, 1), STUDIO_PLUGIN_PORT)).await;
-
-    let server_state_clone = Arc::clone(&server_state);
-    let server_handle = if let Ok(listener) = listener {
-        let app = axum::Router::new()
-            .route("/request", get(request_handler))
-            .route("/response", post(response_handler))
-            .route("/proxy", post(proxy_handler))
-            .with_state(server_state_clone);
-        tracing::info!("This MCP instance is HTTP server listening on {STUDIO_PLUGIN_PORT}");
-        tokio::spawn(async {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    _ = close_rx.await;
-                })
-                .await
-                .unwrap();
-        })
-    } else {
-        tracing::info!("This MCP instance will use proxy since port is busy");
-        tokio::spawn(async move {
-            dud_proxy_loop(server_state_clone, close_rx).await;
-        })
-    };
+    let server_handle = tokio::spawn(serve_http(Arc::clone(&server_state), close_rx));
 
     // Create an instance of our counter router
     let service = RBXStudioServer::new(Arc::clone(&server_state))
@@ -78,7 +52,7 @@ async fn main() -> Result<()> {
         })?;
     service.waiting().await?;
 
-    close_tx.send(()).ok();
+    close_tx.send(true).ok();
     tracing::info!("Waiting for web server to gracefully shutdown");
     server_handle.await.ok();
     tracing::info!("Bye!");

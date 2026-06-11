@@ -42,6 +42,7 @@ end)
 
 local startTime = os.clock()
 local isTimeout = false
+local ok, result = false, nil
 
 local function endTest()
 	local duration = os.clock() - startTime
@@ -74,7 +75,7 @@ task.spawn(function()
 	endTest()
 end)
 
-local ok, result = pcall(function()
+ok, result = pcall(function()
 ]] .. userCode .. [[
 
 end)
@@ -93,7 +94,9 @@ end
 local function injectTestScript(args: Types.RunScriptInPlayModeArgs)
 	removeTestScript()
 
-	local source = buildTestRunnerSource(args.code, args.timeout or 1_000_000)
+	-- Matches the documented default of 100 seconds; the old 1_000_000 default
+	-- effectively never timed out and could leave Studio stuck in play mode.
+	local source = buildTestRunnerSource(args.code, args.timeout or 100)
 	local testScript = Instance.new("Script")
 	testScript.Name = TEST_SCRIPT_NAME
 	testScript.Parent = ServerScriptService

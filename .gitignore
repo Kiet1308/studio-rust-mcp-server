@@ -4,3 +4,7 @@ target/
 .idea/
 .vs/
 output/
+.claude/
+ddg.html
+archtest.html
+upstream_server.rs
