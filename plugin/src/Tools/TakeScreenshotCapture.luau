@@ -9,6 +9,7 @@
 local Main = script:FindFirstAncestor("MCPStudioPlugin")
 local Types = require(Main.Types)
 local UiQuery = require(Main.Utils.UiQuery)
+local VirtualInput = require(Main.Utils.VirtualInput)
 
 local CaptureService = game:GetService("CaptureService")
 local HttpService = game:GetService("HttpService")
@@ -84,6 +85,17 @@ local function handleTakeScreenshotCapture(args: Types.TakeScreenshotCaptureArgs
 			end
 		end
 		-- Give the renderer a frame to apply the visibility change.
+		task.wait(0.1)
+	end
+
+	-- Hover tooltips follow the pointer; parking it in a corner first keeps
+	-- them out of the capture. Only play DataModels accept virtual input.
+	if args.park_mouse and RunService:IsRunning() then
+		pcall(function()
+			local camera = workspace.CurrentCamera
+			local viewport = if camera then camera.ViewportSize else Vector2.new(800, 600)
+			VirtualInput.movePosition(Vector2.new(1, viewport.Y - 1))
+		end)
 		task.wait(0.1)
 	end
 

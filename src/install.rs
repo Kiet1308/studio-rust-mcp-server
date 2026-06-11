@@ -24,15 +24,18 @@ Tools included:
 - get_studio_mode
 - take_screenshot (viewport or a single UI element)
 - get_ui_tree
+- find_ui (search UI by text/name/class)
 - click_ui
 - click_object (3D Parts/Models)
+- list_prompts (nearby ProximityPrompts)
 - mouse_move / mouse_drag (hover, aiming, drag-and-drop)
 - input_sequence (timed input combos in one call)
-- set_camera
+- set_camera (incl. frame to auto-fit an object)
 - send_key
 - send_text
 - control_character
 - wait_for
+- studio_window (restore a minimized/covered Studio window)
 - list_studio_instances
 - select_studio_instance
 

@@ -33,6 +33,7 @@ export type PixelRect = {
 export type TakeScreenshotCaptureArgs = {
 	ui_path: string?,
 	isolate: boolean?,
+	park_mouse: boolean?,
 }
 
 export type TakeScreenshotReadArgs = {
@@ -54,6 +55,21 @@ export type ClickUiArgs = {
 	y: number?,
 	button: string?,
 	action: string?,
+	force: boolean?,
+}
+
+export type FindUiArgs = {
+	text: string?,
+	name: string?,
+	class: string?,
+	root: string?,
+	include_offscreen: boolean?,
+	limit: number?,
+}
+
+export type ListPromptsArgs = {
+	max_distance: number?,
+	limit: number?,
 }
 
 export type GetConsoleOutputArgs = {
@@ -147,6 +163,8 @@ export type ToolArgs =
 	| { TakeScreenshotRead: TakeScreenshotReadArgs }
 	| { GetUiTree: GetUiTreeArgs }
 	| { ClickUi: ClickUiArgs }
+	| { FindUi: FindUiArgs }
+	| { ListPrompts: ListPromptsArgs }
 	| { GetConsoleOutput: GetConsoleOutputArgs }
 	| { GetErrors: GetErrorsArgs }
 	| { MouseMove: MouseMoveArgs }

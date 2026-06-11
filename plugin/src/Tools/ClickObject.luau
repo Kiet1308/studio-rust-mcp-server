@@ -74,6 +74,22 @@ local function handleClickObject(args: Types.ClickObjectArgs): string?
 	local screen = camera:WorldToViewportPoint(clickWorldPoint)
 	local position = Vector2.new(screen.X, screen.Y)
 
+	-- 2D UI drawn over that pixel (hotbar, popup) swallows the click before
+	-- the 3D world ever sees it.
+	local uiOccluder = UiQuery.occluderAt(position, nil)
+	if uiOccluder and args.force ~= true then
+		error(
+			string.format(
+				"%s projects to (%d, %d), but the UI element %s covers that point and would receive the click."
+					.. " Reframe with set_camera so the object is clear of UI, or pass force=true.",
+				target:GetFullName(),
+				position.X,
+				position.Y,
+				uiOccluder:GetFullName()
+			)
+		)
+	end
+
 	local action = args.action or "click"
 	if action == "click" then
 		VirtualInput.click(position, args.button)
@@ -96,6 +112,7 @@ local function handleClickObject(args: Types.ClickObjectArgs): string?
 		y = position.Y,
 		world_point = { x = clickWorldPoint.X, y = clickWorldPoint.Y, z = clickWorldPoint.Z },
 		occluded_by = occludedBy,
+		ui_covered_by = if uiOccluder then uiOccluder:GetFullName() else nil,
 	})
 end
 

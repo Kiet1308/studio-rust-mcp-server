@@ -15,34 +15,54 @@ local function handleClickUi(args: Types.ClickUiArgs): string?
 	VirtualInput.assertRendering()
 
 	local position: Vector2
+	local target: GuiObject? = nil
 	local targetName: string? = nil
 	if args.path and args.path ~= "" then
-		local target = UiQuery.resolve(args.path)
-		if not target:IsA("GuiObject") then
+		local resolved = UiQuery.resolve(args.path)
+		if not resolved:IsA("GuiObject") then
 			error(
 				string.format(
 					"UI path %q resolved to %s (%s), which is not a clickable GuiObject",
 					args.path,
-					target:GetFullName(),
-					target.ClassName
+					resolved:GetFullName(),
+					resolved.ClassName
 				)
 			)
 		end
-		local rect = UiQuery.viewportRect(target)
+		target = resolved
+		local rect = UiQuery.viewportRect(resolved)
 		if rect.w < 1 or rect.h < 1 then
 			error(
 				string.format(
 					"UI element %s has no visible on-screen area; it cannot be clicked. Is it visible?",
-					target:GetFullName()
+					resolved:GetFullName()
 				)
 			)
 		end
-		position = UiQuery.clickPoint(target)
-		targetName = target:GetFullName()
+		position = UiQuery.clickPoint(resolved)
+		targetName = resolved:GetFullName()
 	elseif type(args.x) == "number" and type(args.y) == "number" then
 		position = Vector2.new(args.x, args.y)
 	else
 		error("click_ui needs either a path or both x and y viewport coordinates")
+	end
+
+	-- A different Active element drawn on top (a popup, an overlay) would
+	-- receive the click — silently, since the engine just routes input to the
+	-- topmost element. Surface that instead of clicking blindly. Releases are
+	-- exempt: ending a held gesture over a popup is harmless.
+	if target and args.force ~= true and (args.action or "click") ~= "up" then
+		local occluder = UiQuery.occluderAt(position, target)
+		if occluder then
+			error(
+				string.format(
+					"%s is covered at its center by %s, which would receive the click instead."
+						.. " Dismiss the covering UI or click it directly, or pass force=true to send the click anyway.",
+					target:GetFullName(),
+					occluder:GetFullName()
+				)
+			)
+		end
 	end
 
 	local action = args.action or "click"

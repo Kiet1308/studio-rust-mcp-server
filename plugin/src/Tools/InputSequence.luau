@@ -29,7 +29,14 @@ local function buildStep(step: { [string]: any }): (((any) -> string?)?, any)
 	local action = step.action
 	if action == "click" then
 		return ClickUi,
-			{ path = step.path, x = step.x, y = step.y, button = step.button, action = step.mode or "click" }
+			{
+				path = step.path,
+				x = step.x,
+				y = step.y,
+				button = step.button,
+				action = step.mode or "click",
+				force = step.force,
+			}
 	elseif action == "click_object" then
 		return ClickObject,
 			{ path = step.path, button = step.button, action = step.mode or "click", force = step.force }

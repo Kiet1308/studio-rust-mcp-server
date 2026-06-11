@@ -329,11 +329,13 @@ Prefer start_stop_play over run_script_in_play_mode; the latter is only for one-
 
 End-to-end play testing (like a real player):
 1. start_stop_play mode=start_play, then wait_for the character: condition='local p = game.Players.LocalPlayer; return p and p.Character ~= nil'.
-2. See the game with take_screenshot (full viewport, or ui_path to crop one UI element, isolate=true to hide other UI). Use set_camera (set/look_at, then restore) to frame a specific 3D area first.
-3. Find UI with get_ui_tree (live PlayerGui; rects are viewport coords), then interact: click_ui (path or x/y), click_object (3D Parts/Models by workspace path), mouse_drag (aiming, sliders, drag-and-drop; auto-handles locked-cursor camera drags), mouse_move (hover), send_key (W/A/S/D, Space, action=press with duration to hold), send_text (TextBoxes), control_character (move_to/walk/jump/get_state). For timing-sensitive combos run several steps in one input_sequence call.
+2. See the game with take_screenshot (full viewport, or ui_path to crop one UI element, isolate=true to hide other UI, park_mouse=true to keep hover tooltips out). Use set_camera (frame target_path=... auto-fits an object; or set/look_at, then restore) to look at a specific 3D area first.
+3. Find what to interact with: find_ui (search by text/name/class — returns paths, rects, and covered_by when something overlaps), get_ui_tree (full hierarchy), list_prompts (nearby ProximityPrompts with key and hold duration). Then interact: click_ui (path or x/y; fails naming the covering element if a popup would swallow the click — dismiss it or force=true), click_object (3D Parts/Models by workspace path), mouse_drag (aiming, sliders, drag-and-drop; auto-handles locked-cursor camera drags), mouse_move (hover), send_key (W/A/S/D, Space, action=press with duration to hold; triggers in-range ProximityPrompts), send_text (TextBoxes), control_character (move_to/walk/jump/get_state). For timing-sensitive combos run several steps in one input_sequence call.
 4. Verify outcomes with wait_for + take_screenshot + get_console_output (pass since_seq=last_seq from the previous call for only-new entries; level=error to filter) and get_errors (script errors with stack traces, check context=server and context=client) instead of sleeping blindly.
 5. start_stop_play mode=stop when done.
-Input and screenshots need the Studio window visible (not minimized); a focused TextBox swallows key input until released.
+Input and screenshots need the Studio window visible: tools restore a minimized/covered window automatically and retry once, and studio_window (status/restore) does it explicitly.
+COORDINATES: screenshot images are DPI-scaled — image pixels are NOT viewport coordinates. Click by element path or get_ui_tree/find_ui rects; to click something only seen in an image, scale by (viewport size / image size) from the screenshot metadata.
+A focused TextBox swallows key input until released.
 "
                     .to_string(),
             ),
@@ -425,6 +427,10 @@ struct TakeScreenshot {
     max_dimension: Option<u32>,
     #[schemars(description = "Output format: png (default) or jpeg.")]
     format: Option<String>,
+    #[schemars(
+        description = "Move the pointer to a screen corner before capturing so hover tooltips don't pollute the image. Defaults to false (the pointer state may be part of what you're verifying)."
+    )]
+    park_mouse: Option<bool>,
 }
 
 // Internal commands used by take_screenshot; not exposed as MCP tools.
@@ -432,6 +438,7 @@ struct TakeScreenshot {
 struct TakeScreenshotCapture {
     ui_path: Option<String>,
     isolate: Option<bool>,
+    park_mouse: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone, Copy)]
@@ -501,6 +508,44 @@ struct ClickUi {
     button: Option<String>,
     #[schemars(description = "click (default; press and release), down, or up.")]
     action: Option<String>,
+    #[schemars(
+        description = "Send the click even when another UI element (popup, overlay) covers the target and would receive it instead."
+    )]
+    force: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone)]
+struct FindUi {
+    #[schemars(
+        description = "Case-insensitive substring to match against element text (TextLabel/TextButton/TextBox)."
+    )]
+    text: Option<String>,
+    #[schemars(description = "Case-insensitive substring to match against instance names.")]
+    name: Option<String>,
+    #[schemars(
+        description = "Class filter with IsA semantics, e.g. TextButton, GuiButton (matches Text+Image buttons), TextBox."
+    )]
+    class: Option<String>,
+    #[schemars(
+        description = "Root to search under (PlayerGui-relative path). Defaults to the whole PlayerGui (StarterGui outside play)."
+    )]
+    root: Option<String>,
+    #[schemars(
+        description = "Also return elements that are not currently on screen (invisible, zero-size, disabled gui, or outside the viewport). Defaults to false."
+    )]
+    include_offscreen: Option<bool>,
+    #[schemars(description = "Maximum matches returned. Defaults to 20, max 100.")]
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone)]
+struct ListPrompts {
+    #[schemars(
+        description = "Only prompts within this many studs of the character (camera outside play). Defaults to 100."
+    )]
+    max_distance: Option<f64>,
+    #[schemars(description = "Maximum prompts returned, nearest first. Defaults to 20, max 100.")]
+    limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone)]
@@ -707,6 +752,18 @@ struct WaitFor {
 struct ListStudioInstances {}
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone)]
+struct StudioWindow {
+    #[schemars(
+        description = "status (list Roblox Studio windows: title, minimized, foreground), or restore (un-minimize and bring to the foreground so rendering resumes; focus is an alias)."
+    )]
+    action: String,
+    #[schemars(
+        description = "Substring of the window title to pick when several Studio windows are open. Defaults to the selected instance's window, or the only open one."
+    )]
+    title: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone)]
 struct SelectStudioInstance {
     #[schemars(
         description = "Which Studio window to operate on: a place name (case-insensitive substring), a placeId, or the full instance id from list_studio_instances. Pass 'auto' to clear the selection."
@@ -757,6 +814,8 @@ enum ToolArgumentValues {
     TakeScreenshotRead(TakeScreenshotRead),
     GetUiTree(GetUiTree),
     ClickUi(ClickUi),
+    FindUi(FindUi),
+    ListPrompts(ListPrompts),
     GetErrors(GetErrors),
     MouseMove(MouseMove),
     MouseDrag(MouseDrag),
@@ -1136,6 +1195,7 @@ impl RBXStudioServer {
                 ToolArgumentValues::TakeScreenshotCapture(TakeScreenshotCapture {
                     ui_path: args.ui_path.clone(),
                     isolate: args.isolate,
+                    park_mouse: args.park_mouse,
                 }),
                 capture_role,
                 instance.clone(),
@@ -1196,6 +1256,7 @@ impl RBXStudioServer {
     #[tool(
         description = "Click like a real player through the engine's input pipeline (GuiButton handlers, InputBegan, etc. all fire normally). \
         Target a UI element by path (clicked at its center) or an explicit viewport x/y position (e.g. to click the 3D world). \
+        Path-targeted clicks fail with the covering element's name when a popup/overlay would receive the click instead (force=true clicks anyway). \
         Requires play mode (start_stop_play with start_play) and a visible Studio window. \
         Verify the effect afterwards with take_screenshot or get_ui_tree."
     )]
@@ -1205,6 +1266,53 @@ impl RBXStudioServer {
     ) -> Result<CallToolResult, ErrorData> {
         self.generic_tool_run_on(ToolArgumentValues::ClickUi(args), TargetRole::Client)
             .await
+    }
+
+    #[tool(
+        description = "Find UI elements by text, name, or class without dumping the whole tree — the fast way to locate a button, popup, or TextBox in a real game's deep UI. \
+        Returns path (feed it to click_ui/send_text directly), class, rect, text, clickable/editable flags, and covered_by when another element would swallow a click. \
+        Only elements actually on screen are returned unless include_offscreen=true."
+    )]
+    async fn find_ui(
+        &self,
+        Parameters(args): Parameters<FindUi>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = async {
+            let instance = self.resolve_instance().await?;
+            let target = self
+                .play_aware_role(TargetRole::Edit, instance.clone())
+                .await?;
+            self.execute_on_instance(ToolArgumentValues::FindUi(args), target, instance)
+                .await
+        }
+        .await;
+        match result {
+            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
+            Err(err) => Ok(CallToolResult::error(vec![Content::text(err)])),
+        }
+    }
+
+    #[tool(
+        description = "List nearby ProximityPrompts (the 'press E to interact' affordances): action text, key, hold duration, world position, distance, and whether the character is in range. \
+        To trigger one, get in range (control_character move_to) and send_key with its key — for hold prompts use action=press with duration >= hold_duration."
+    )]
+    async fn list_prompts(
+        &self,
+        Parameters(args): Parameters<ListPrompts>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let result = async {
+            let instance = self.resolve_instance().await?;
+            let target = self
+                .play_aware_role(TargetRole::Server, instance.clone())
+                .await?;
+            self.execute_on_instance(ToolArgumentValues::ListPrompts(args), target, instance)
+                .await
+        }
+        .await;
+        match result {
+            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
+            Err(err) => Ok(CallToolResult::error(vec![Content::text(err)])),
+        }
     }
 
     #[tool(
@@ -1259,7 +1367,7 @@ impl RBXStudioServer {
 
     #[tool(
         description = "Click a 3D object in the workspace (Part or Model) like a real player: its position is projected to the screen and clicked through the real input pipeline, so ClickDetectors and raycast-based games respond normally. \
-        Fails with an explanation if the object is off screen or hidden behind something (set_camera or move closer first; force=true clicks anyway). \
+        Fails with an explanation if the object is off screen, hidden behind world geometry, or covered by 2D UI at that pixel (set_camera or move closer first; force=true clicks anyway). \
         Requires play mode and a visible Studio window."
     )]
     async fn click_object(
@@ -1271,8 +1379,9 @@ impl RBXStudioServer {
     }
 
     #[tool(
-        description = "Position the camera for verification: action=set places it at x/y/z (optionally aimed at target_path or target_x/y/z), look_at aims the current position at a target, get reads the camera, restore puts the player's original camera back. \
-        Use before take_screenshot to verify a specific 3D area (e.g. top-down over a board/table), or before click_object/mouse_drag when the target is off screen. \
+        description = "Position the camera for verification: action=set places it at x/y/z (optionally aimed at target_path or target_x/y/z), look_at aims the current position at a target, \
+        frame auto-positions to fit a target object's whole bounding box in view (no coordinates needed), get reads the camera, restore puts the player's original camera back. \
+        Use before take_screenshot to verify a specific 3D area, or before click_object/mouse_drag when the target is off screen. \
         Always restore when done so normal play input works again."
     )]
     async fn set_camera(
@@ -1449,6 +1558,52 @@ impl RBXStudioServer {
     // play mode, `run_server_role` in run mode, edit otherwise. Asks the edit
     // plugin for the mode so it also works from proxying instances, which have
     // no poll-freshness knowledge of their own.
+    #[tool(
+        description = "Inspect or restore the Roblox Studio window at the OS level. \
+        Studio pauses rendering while its window is minimized or fully covered, which silently breaks input and screenshots — tools auto-restore the window and retry once when that happens, \
+        but action=status shows the window state (title, minimized, foreground) and action=restore forces the window back to the foreground explicitly."
+    )]
+    async fn studio_window(
+        &self,
+        Parameters(args): Parameters<StudioWindow>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let hint = match args.title.clone() {
+            Some(title) => Some(title),
+            None => self.window_hint().await,
+        };
+        let result = tokio::task::spawn_blocking(move || match args.action.as_str() {
+            "status" => crate::os_window::studio_windows().map(|windows| {
+                serde_json::json!({ "windows": windows }).to_string()
+            }),
+            "restore" | "focus" => crate::os_window::restore_studio_window(hint.as_deref())
+                .map(|title| {
+                    serde_json::json!({ "restored": title, "note": "Rendering resumes within a second once the window is visible." }).to_string()
+                }),
+            other => Err(format!(
+                "Invalid action '{other}': must be status or restore"
+            )),
+        })
+        .await
+        .map_err(|e| format!("Window control task failed: {e}"))
+        .and_then(|inner| inner);
+        match result {
+            Ok(result) => Ok(CallToolResult::success(vec![Content::text(result)])),
+            Err(err) => Ok(CallToolResult::error(vec![Content::text(err)])),
+        }
+    }
+
+    // The window-title hint for the current selection: the place-name part of
+    // the instance id ("placeId|name").
+    async fn window_hint(&self) -> Option<String> {
+        let instance = self.resolve_instance().await.ok().flatten()?;
+        let name = instance.split('|').nth(1)?;
+        if name.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    }
+
     async fn play_aware_role(
         &self,
         run_server_role: TargetRole,
@@ -1528,6 +1683,55 @@ impl RBXStudioServer {
     }
 
     async fn execute_on_instance(
+        &self,
+        args: ToolArgumentValues,
+        target: TargetRole,
+        instance: Option<String>,
+    ) -> Result<String, String> {
+        let retry_args = args.clone();
+        let result = self
+            .execute_on_instance_once(args, target, instance.clone())
+            .await;
+        // The plugin refuses input/captures while Studio is not rendering
+        // (window minimized or fully covered). That is fixable from out here:
+        // restore the window at the OS level and retry once.
+        let Err(err) = &result else { return result };
+        if !err.contains("Studio is not rendering") {
+            return result;
+        }
+        let hint = instance
+            .as_deref()
+            .and_then(|instance| instance.split('|').nth(1))
+            .map(str::to_string);
+        let restored = tokio::task::spawn_blocking(move || {
+            crate::os_window::restore_studio_window(hint.as_deref())
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|inner| inner);
+        match restored {
+            Ok(title) => {
+                tracing::info!(
+                    "Restored Studio window '{title}' after a not-rendering error; retrying"
+                );
+                // Give the engine a moment to resume rendering frames.
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                self.execute_on_instance_once(retry_args, target, instance)
+                    .await
+                    .map_err(|e| {
+                        format!(
+                            "{e} (the Studio window '{title}' was restored automatically \
+                             and the command retried once)"
+                        )
+                    })
+            }
+            Err(restore_err) => Err(format!(
+                "{err} Automatic window restore did not work: {restore_err}"
+            )),
+        }
+    }
+
+    async fn execute_on_instance_once(
         &self,
         args: ToolArgumentValues,
         target: TargetRole,

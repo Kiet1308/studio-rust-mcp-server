@@ -63,13 +63,43 @@ local function handleSetCamera(args: Types.SetCameraArgs): string?
 		return HttpService:JSONEncode(describe(camera))
 	end
 
-	if action ~= "set" and action ~= "look_at" then
-		error(string.format("Invalid action %q: must be set, look_at, restore, or get", tostring(action)))
+	if action ~= "set" and action ~= "look_at" and action ~= "frame" then
+		error(string.format("Invalid action %q: must be set, look_at, frame, restore, or get", tostring(action)))
 	end
 
 	local targetPos = resolveTargetPosition(args)
+	local newFov = if type(args.fov) == "number" then math.clamp(args.fov, 1, 120) else camera.FieldOfView
 	local newCFrame: CFrame
-	if action == "set" then
+	if action == "frame" then
+		-- Auto-position: back away from the target along a 3/4 diagonal until
+		-- its whole bounding box fits the field of view.
+		local center: Vector3
+		local extent: number
+		if args.target_path and args.target_path ~= "" then
+			local target = UiQuery.resolveWorld(args.target_path)
+			local size: Vector3
+			if target:IsA("Model") then
+				local cf: CFrame
+				cf, size = (target :: Model):GetBoundingBox()
+				center = cf.Position
+			elseif target:IsA("BasePart") then
+				center = (target :: BasePart).Position
+				size = (target :: BasePart).Size
+			else
+				center = target:GetPivot().Position
+				size = Vector3.new(4, 4, 4)
+			end
+			extent = math.max(size.X, size.Y, size.Z, 1)
+		elseif targetPos then
+			center = targetPos
+			extent = 10
+		else
+			error("frame needs target_path or target_x/target_y/target_z")
+		end
+		local distance = (extent / 2) / math.tan(math.rad(newFov) / 2) * 1.3 + extent / 2
+		local direction = Vector3.new(1, 0.7, 1).Unit
+		newCFrame = CFrame.lookAt(center + direction * distance, center)
+	elseif action == "set" then
 		if type(args.x) ~= "number" or type(args.y) ~= "number" or type(args.z) ~= "number" then
 			error("set needs x, y, z for the camera position (and optionally a target to aim at)")
 		end
@@ -99,9 +129,7 @@ local function handleSetCamera(args: Types.SetCameraArgs): string?
 
 	camera.CameraType = Enum.CameraType.Scriptable
 	camera.CFrame = newCFrame
-	if type(args.fov) == "number" then
-		camera.FieldOfView = math.clamp(args.fov, 1, 120)
-	end
+	camera.FieldOfView = newFov
 	-- Let a frame render with the new camera before the caller screenshots.
 	task.wait(0.1)
 

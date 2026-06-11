@@ -41,12 +41,50 @@ local function childNames(parent: Instance): string
 	return table.concat(names, ", ")
 end
 
+-- Backtracking resolution: tries the plain segment first, then progressively
+-- longer joins of the following segments, so instance names that themselves
+-- contain "." still resolve. `deepest` records where resolution got furthest
+-- for the error message.
+local function resolveFrom(
+	current: Instance,
+	segments: { string },
+	index: number,
+	deepest: { node: Instance, index: number }
+): Instance?
+	if index > #segments then
+		return current
+	end
+	if index > deepest.index then
+		deepest.node = current
+		deepest.index = index
+	end
+	local name = segments[index]
+	for last = index, #segments do
+		if last > index then
+			name ..= "." .. segments[last]
+		end
+		local child = current:FindFirstChild(name)
+		if not child and current == game then
+			-- Allow service names at the top level ("game.Workspace...").
+			local ok, service = pcall(game.GetService, game, name)
+			child = if ok then service else nil
+		end
+		if child then
+			local resolved = resolveFrom(child, segments, last + 1, deepest)
+			if resolved then
+				return resolved
+			end
+		end
+	end
+	return nil
+end
+
 -- Resolves a dot-separated path ("ShopGui.Frame.BuyButton") relative to the
 -- gui root. Also accepts absolute paths starting with "game", or with the
 -- root's own name ("PlayerGui...." / "StarterGui....").
 function UiQuery.resolve(path: string): Instance
 	local segments = string.split(path, ".")
-	if #segments == 0 then
+	if path == "" or #segments == 0 then
 		error("Empty UI path")
 	end
 
@@ -62,31 +100,39 @@ function UiQuery.resolve(path: string): Instance
 	else
 		current = UiQuery.guiRoot()
 	end
-
-	for i = startIndex, #segments do
-		local segment = segments[i]
-		local nextInstance = current:FindFirstChild(segment)
-		if not nextInstance and current == game then
-			-- Allow service names at the top level ("game.Workspace...").
-			local ok, service = pcall(function()
-				return game:GetService(segment)
-			end)
-			nextInstance = if ok then service else nil
-		end
-		if not nextInstance then
-			error(
-				string.format(
-					"UI path %q not found: %q has no child %q. Available children: %s",
-					path,
-					current:GetFullName(),
-					segment,
-					childNames(current)
-				)
-			)
-		end
-		current = nextInstance
+	if startIndex > #segments then
+		return current
 	end
-	return current
+
+	local deepest = { node = current, index = startIndex }
+	local resolved = resolveFrom(current, segments, startIndex, deepest)
+	if not resolved then
+		error(
+			string.format(
+				"UI path %q not found: %q has no child %q. Available children: %s",
+				path,
+				deepest.node:GetFullName(),
+				segments[deepest.index] or "?",
+				childNames(deepest.node)
+			)
+		)
+	end
+	return resolved
+end
+
+-- A path for the element relative to the gui root, in the form the UI tools
+-- accept back (find_ui results feed click_ui directly).
+function UiQuery.relativePath(gui: Instance, root: Instance): string
+	local parts = {}
+	local node: Instance? = gui
+	while node and node ~= root do
+		table.insert(parts, 1, node.Name)
+		node = node.Parent
+	end
+	if node ~= root then
+		return gui:GetFullName()
+	end
+	return table.concat(parts, ".")
 end
 
 -- Resolves a path to a 3D object. Bare paths are relative to Workspace
@@ -209,6 +255,137 @@ local function serializeNode(instance: Instance, depth: number, maxDepth: number
 	end
 
 	return node
+end
+
+local function siblingIndex(inst: Instance): number
+	local parent = inst.Parent
+	if not parent then
+		return 0
+	end
+	for i, child in parent:GetChildren() do
+		if child == inst then
+			return i
+		end
+	end
+	return 0
+end
+
+-- The LayerCollector a GuiObject renders in, plus the ancestor chain from the
+-- layer's direct child down to the object itself (may include Folders).
+local function layerChain(gui: GuiObject): (LayerCollector?, { Instance })
+	local chain: { Instance } = {}
+	local node: Instance? = gui
+	while node and not node:IsA("LayerCollector") do
+		table.insert(chain, 1, node)
+		node = node.Parent
+	end
+	return if node then node :: LayerCollector else nil, chain
+end
+
+local function zOf(inst: Instance): number
+	return if inst:IsA("GuiObject") then (inst :: GuiObject).ZIndex else 0
+end
+
+-- Whether `a` draws above `b`: DisplayOrder across LayerCollectors, then
+-- ZIndex/tree order within one (covering both Sibling and Global behaviors).
+function UiQuery.rendersAbove(a: GuiObject, b: GuiObject): boolean
+	local layerA, chainA = layerChain(a)
+	local layerB, chainB = layerChain(b)
+	if layerA ~= layerB then
+		if not layerA then
+			return false
+		end
+		if not layerB then
+			return true
+		end
+		local da = if layerA:IsA("ScreenGui") then (layerA :: ScreenGui).DisplayOrder else 0
+		local db = if layerB:IsA("ScreenGui") then (layerB :: ScreenGui).DisplayOrder else 0
+		if da ~= db then
+			return da > db
+		end
+		return siblingIndex(layerA) > siblingIndex(layerB)
+	end
+	if layerA and layerA.ZIndexBehavior == Enum.ZIndexBehavior.Global then
+		if a.ZIndex ~= b.ZIndex then
+			return a.ZIndex > b.ZIndex
+		end
+	end
+	for i = 1, math.min(#chainA, #chainB) do
+		local ca, cb = chainA[i], chainB[i]
+		if ca ~= cb then
+			if zOf(ca) ~= zOf(cb) then
+				return zOf(ca) > zOf(cb)
+			end
+			return siblingIndex(ca) > siblingIndex(cb)
+		end
+	end
+	-- One is an ancestor of the other; the deeper element draws on top of it.
+	return #chainA > #chainB
+end
+
+-- Whether `obj` would intercept a click meant for `target` (nil target = a
+-- click aimed at the 3D world). Button activation routing only considers
+-- interactive elements — a plain Active frame does NOT steal a click from a
+-- GuiButton below it (verified empirically) — but Active elements do sink
+-- input aimed at the world or at InputBegan-style handlers.
+local function intercepts(obj: GuiObject, target: GuiObject?): boolean
+	if obj:IsA("GuiButton") or obj:IsA("TextBox") then
+		return true
+	end
+	return obj.Active and not (target and target:IsA("GuiButton"))
+end
+
+-- The topmost element that would swallow a click at `position` (render-area
+-- pixels). With `target` given, the target itself, its descendants/ancestors,
+-- and anything it draws above do not count — what is returned really would
+-- receive the click instead of the target.
+function UiQuery.occluderAt(position: Vector2, target: GuiObject?): GuiObject?
+	local root = UiQuery.guiRoot()
+	if not root:IsA("BasePlayerGui") then
+		return nil
+	end
+	local inset = GuiService:GetGuiInset()
+	local objects =
+		(root :: any):GetGuiObjectsAtPosition(position.X - inset.X, position.Y - inset.Y) :: { GuiObject }
+	local top: GuiObject? = nil
+	for _, obj in objects do
+		if not (obj:IsA("GuiObject") and obj.Visible and intercepts(obj, target)) then
+			continue
+		end
+		if target and (obj == target or obj:IsDescendantOf(target) or target:IsDescendantOf(obj)) then
+			continue
+		end
+		if not top or UiQuery.rendersAbove(obj, top) then
+			top = obj
+		end
+	end
+	if top and target and not UiQuery.rendersAbove(top, target) then
+		return nil
+	end
+	return top
+end
+
+-- Whether the element is actually rendered and at least partly inside the
+-- viewport: self and ancestors visible, layer enabled, nonzero on-screen area.
+function UiQuery.isOnScreen(gui: GuiObject): boolean
+	if gui.AbsoluteSize.X < 1 or gui.AbsoluteSize.Y < 1 then
+		return false
+	end
+	local node: Instance? = gui
+	while node do
+		if node:IsA("GuiObject") and not (node :: GuiObject).Visible then
+			return false
+		end
+		if node:IsA("LayerCollector") then
+			if not (node :: LayerCollector).Enabled then
+				return false
+			end
+			break
+		end
+		node = node.Parent
+	end
+	local rect = UiQuery.viewportRect(gui)
+	return rect.w >= 1 and rect.h >= 1
 end
 
 -- Serializes the UI hierarchy under root into a compact tree the model can

@@ -9,6 +9,7 @@ use tracing_subscriber::{self, EnvFilter};
 mod error;
 mod install;
 mod os_capture;
+mod os_window;
 mod rbx_studio_server;
 
 /// Simple MCP proxy for Roblox Studio

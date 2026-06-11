@@ -65,12 +65,16 @@ local function runCodeWithOutput(command: string): string
 
 	local function toStrTable(t: { any }): { string }
 		local clonedTable = deepClone(t, {})
-		local strTable = table.create(#clonedTable)
-		for i, arg in clonedTable do
-			local serializedArg = serializeTable(arg)
+		-- table.pack keeps the argument count in "n"; trust it over # so nil
+		-- arguments still render as "nil" instead of truncating the output.
+		local count = (clonedTable :: any).n or #clonedTable
+		local strTable = table.create(count)
+		for i = 1, count do
+			local serializedArg = serializeTable(clonedTable[i])
 			strTable[i] = if typeof(serializedArg) == "table"
 				then HttpService:JSONEncode(serializedArg)
-				else serializedArg
+				elseif typeof(serializedArg) == "string" then serializedArg
+				else tostring(serializedArg)
 		end
 		return strTable
 	end
