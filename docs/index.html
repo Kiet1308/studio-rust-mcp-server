@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Studio MCP — AI that plays your Roblox game</title>
+<meta name="description" content="An actively-developed fork of Roblox's studio-rust-mcp-server. Gives any MCP client eyes and hands inside Roblox Studio: screenshots, UI search, real input, character & camera control, structured errors, multi-Studio routing. 6 tools → 24." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500;600;700&family=Spline+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+/* ============================================================= TOKENS */
+:root{
+  --ink:#0A0B0E;
+  --ink-1:#0E1014;
+  --ink-2:#13161C;
+  --ink-3:#191D25;
+  --line:rgba(255,255,255,.09);
+  --line-2:rgba(255,255,255,.16);
+  --text:#ECEAE3;
+  --dim:#9097A2;
+  --dim-2:#666C77;
+  --coral:#FF5436;       /* lock-on / primary */
+  --coral-2:#FF7A4D;
+  --cyan:#34E5C8;        /* telemetry / NEW */
+  --amber:#FFB627;       /* warning / accent */
+  --coral-glow:rgba(255,84,54,.55);
+  --cyan-glow:rgba(52,229,200,.45);
+  --r:3px;
+  --maxw:1180px;
+  --mono:'JetBrains Mono',ui-monospace,monospace;
+  --disp:'Bricolage Grotesque',sans-serif;
+  --body:'Spline Sans',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  font-family:var(--body);
+  background:var(--ink);
+  color:var(--text);
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+::selection{background:var(--coral);color:#fff}
+a{color:inherit;text-decoration:none}
+img{max-width:100%}
+
+/* ============================================================= ATMOSPHERE */
+.grid-bg,.grain,.scan{position:fixed;inset:0;pointer-events:none;z-index:0}
+.grid-bg{
+  background-image:
+    linear-gradient(var(--line) 1px,transparent 1px),
+    linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:64px 64px;
+  -webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 0%,transparent 75%);
+          mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000 0%,transparent 75%);
+  opacity:.5;
+}
+.glow-orb{position:fixed;border-radius:50%;filter:blur(120px);pointer-events:none;z-index:0;opacity:.5}
+.orb-1{width:520px;height:520px;background:radial-gradient(circle,var(--coral) 0%,transparent 70%);top:-180px;left:-120px;opacity:.22}
+.orb-2{width:480px;height:480px;background:radial-gradient(circle,var(--cyan) 0%,transparent 70%);top:340px;right:-160px;opacity:.13}
+.grain{
+  z-index:60;opacity:.05;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+.scan{z-index:61;opacity:.35;background:repeating-linear-gradient(0deg,transparent 0,transparent 2px,rgba(0,0,0,.16) 3px,transparent 4px)}
+
+/* ============================================================= SHELL */
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px;position:relative;z-index:2}
+section{position:relative;z-index:2}
+
+/* mono kicker */
+.kick{
+  font-family:var(--mono);font-size:11.5px;letter-spacing:.26em;text-transform:uppercase;
+  color:var(--dim);display:inline-flex;align-items:center;gap:10px;
+}
+.kick::before{content:"";width:7px;height:7px;background:var(--coral);border-radius:50%;
+  box-shadow:0 0 10px var(--coral-glow);animation:pulse 2.4s infinite}
+.kick.cy::before{background:var(--cyan);box-shadow:0 0 10px var(--cyan-glow)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+.sec-head{margin-bottom:54px}
+.sec-head .idx{font-family:var(--mono);font-size:12px;color:var(--coral);letter-spacing:.2em}
+.sec-title{
+  font-family:var(--disp);font-weight:700;letter-spacing:-.02em;line-height:1.02;
+  font-size:clamp(2rem,4.6vw,3.5rem);margin-top:18px;
+}
+.sec-sub{color:var(--dim);max-width:60ch;margin-top:18px;font-size:1.04rem}
+
+/* corner-bracket decoration */
+.brk{position:relative}
+.brk::before,.brk::after{
+  content:"";position:absolute;width:14px;height:14px;pointer-events:none;
+  border:1.5px solid var(--line-2);
+}
+.brk::before{top:-1px;left:-1px;border-right:0;border-bottom:0}
+.brk::after{bottom:-1px;right:-1px;border-left:0;border-top:0}
+
+/* ============================================================= NAV */
+header.nav{
+  position:fixed;top:0;left:0;right:0;z-index:50;
+  border-bottom:1px solid transparent;transition:.3s;
+}
+header.nav.stuck{background:rgba(10,11,14,.82);backdrop-filter:blur(14px);border-color:var(--line)}
+.nav-in{max-width:var(--maxw);margin:0 auto;padding:14px 28px;display:flex;align-items:center;gap:28px}
+.brand{display:flex;align-items:center;gap:11px;font-family:var(--disp);font-weight:700;font-size:17px;letter-spacing:-.01em}
+.brand .mark{width:30px;height:30px;flex:none}
+.brand small{font-family:var(--mono);font-weight:500;font-size:9.5px;letter-spacing:.18em;
+  color:var(--coral);border:1px solid var(--coral);border-radius:2px;padding:2px 5px;text-transform:uppercase}
+.nav-links{display:flex;gap:26px;margin-left:auto;font-family:var(--mono);font-size:12.5px;letter-spacing:.04em;color:var(--dim)}
+.nav-links a{transition:color .2s;position:relative;padding:4px 0}
+.nav-links a:hover{color:var(--text)}
+.nav-links a::after{content:"";position:absolute;left:0;bottom:-2px;height:1px;width:0;background:var(--coral);transition:width .25s}
+.nav-links a:hover::after{width:100%}
+.nav-cta{font-family:var(--mono);font-size:12.5px;display:inline-flex;align-items:center;gap:8px;
+  border:1px solid var(--line-2);padding:9px 15px;border-radius:var(--r);transition:.2s;white-space:nowrap}
+.nav-cta:hover{background:var(--text);color:var(--ink);border-color:var(--text)}
+.burger{display:none;margin-left:auto;background:none;border:1px solid var(--line-2);border-radius:var(--r);
+  width:42px;height:38px;color:var(--text);cursor:pointer;font-size:18px}
+
+/* ============================================================= HERO */
+.hero{padding:152px 0 90px;position:relative}
+.hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center}
+.fork-tag{
+  font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;
+  display:inline-flex;align-items:center;gap:10px;color:var(--dim);
+  border:1px solid var(--line);border-radius:100px;padding:7px 14px;margin-bottom:30px;
+  background:linear-gradient(90deg,rgba(255,84,54,.08),transparent);
+}
+.fork-tag b{color:var(--cyan);font-weight:600}
+h1.hero-h{
+  font-family:var(--disp);font-weight:800;letter-spacing:-.03em;line-height:.96;
+  font-size:clamp(2.9rem,7vw,5.4rem);
+}
+h1.hero-h .lock{position:relative;color:var(--coral);white-space:nowrap;display:inline-block}
+h1.hero-h .lock::before,h1.hero-h .lock::after{
+  content:"";position:absolute;width:13px;height:13px;border:2px solid var(--coral);opacity:.85}
+h1.hero-h .lock::before{top:-9px;left:-11px;border-right:0;border-bottom:0}
+h1.hero-h .lock::after{bottom:-9px;right:-11px;border-left:0;border-top:0}
+.hero-lead{margin-top:26px;font-size:1.16rem;color:#C3C7CF;max-width:48ch}
+.hero-lead b{color:var(--text);font-weight:600}
+.hero-cta{display:flex;flex-wrap:wrap;gap:14px;margin-top:38px}
+.btn{
+  font-family:var(--mono);font-size:13.5px;font-weight:600;letter-spacing:.02em;
+  display:inline-flex;align-items:center;gap:10px;padding:14px 22px;border-radius:var(--r);
+  cursor:pointer;transition:transform .15s,box-shadow .25s,background .2s;border:1px solid transparent;
+}
+.btn-primary{background:var(--coral);color:#160600;box-shadow:0 0 0 1px var(--coral),0 8px 30px -8px var(--coral-glow)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 0 0 1px var(--coral),0 14px 40px -10px var(--coral-glow)}
+.btn-ghost{border-color:var(--line-2);color:var(--text);background:rgba(255,255,255,.02)}
+.btn-ghost:hover{border-color:var(--text);transform:translateY(-2px)}
+.hero-note{font-family:var(--mono);font-size:11.5px;color:var(--dim-2);margin-top:20px;letter-spacing:.02em}
+.hero-note b{color:var(--dim)}
+
+/* viewfinder */
+.viewfinder{
+  position:relative;background:linear-gradient(160deg,var(--ink-2),var(--ink-1));
+  border:1px solid var(--line-2);border-radius:6px;padding:16px;
+  box-shadow:0 40px 90px -40px #000, inset 0 1px 0 rgba(255,255,255,.04);
+}
+.vf-corner{position:absolute;width:20px;height:20px;border:2px solid var(--coral);z-index:3}
+.vf-corner.tl{top:9px;left:9px;border-right:0;border-bottom:0}
+.vf-corner.tr{top:9px;right:9px;border-left:0;border-bottom:0}
+.vf-corner.bl{bottom:9px;left:9px;border-right:0;border-top:0}
+.vf-corner.br{bottom:9px;right:9px;border-left:0;border-top:0}
+.vf-top{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);
+  font-size:10px;letter-spacing:.14em;color:var(--dim);padding:2px 6px 12px;text-transform:uppercase}
+.rec{display:inline-flex;align-items:center;gap:6px;color:var(--coral)}
+.rec .dot{width:7px;height:7px;border-radius:50%;background:var(--coral);animation:pulse 1.3s infinite}
+.term{
+  background:#07080A;border:1px solid var(--line);border-radius:4px;padding:16px 16px 18px;
+  font-family:var(--mono);font-size:12.2px;line-height:1.85;min-height:330px;position:relative;overflow:hidden;
+}
+.term::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 60% at 50% 0%,transparent,rgba(0,0,0,.5))}
+.ln{white-space:pre-wrap;opacity:0;transform:translateY(4px);animation:lnin .35s forwards}
+@keyframes lnin{to{opacity:1;transform:none}}
+.cmd{color:#D9DCE2}
+.cmd .p{color:var(--coral)}
+.cmd .arg{color:var(--amber)}
+.ok{color:var(--cyan)}
+.ok .c{color:var(--dim)}
+.muted{color:var(--dim-2)}
+.vf-bot{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;
+  letter-spacing:.1em;color:var(--dim-2);padding:11px 6px 2px;text-transform:uppercase}
+.reticle{position:absolute;top:50%;left:50%;width:46px;height:46px;transform:translate(-50%,-50%);
+  z-index:2;pointer-events:none;opacity:.0;animation:retin 1s 2.2s forwards}
+@keyframes retin{to{opacity:.5}}
+.reticle::before,.reticle::after{content:"";position:absolute;background:var(--cyan)}
+.reticle::before{left:50%;top:0;bottom:0;width:1px;transform:translateX(-.5px)}
+.reticle::after{top:50%;left:0;right:0;height:1px;transform:translateY(-.5px)}
+
+/* marquee */
+.marquee{border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  background:rgba(255,255,255,.012);overflow:hidden;margin-top:84px;padding:14px 0}
+.mq-track{display:flex;gap:48px;white-space:nowrap;width:max-content;animation:mq 38s linear infinite;
+  font-family:var(--mono);font-size:13px;letter-spacing:.08em;color:var(--dim)}
+.mq-track span{display:inline-flex;align-items:center;gap:48px}
+.mq-track b{color:var(--text);font-weight:500}
+.mq-track i{color:var(--coral);font-style:normal}
+@keyframes mq{to{transform:translateX(-50%)}}
+
+/* ============================================================= LEAP / STATS */
+.leap{padding:96px 0 90px}
+.leap-band{
+  border:1px solid var(--line);border-radius:8px;background:linear-gradient(180deg,var(--ink-1),rgba(10,11,14,0));
+  padding:48px 44px;position:relative;overflow:hidden;
+}
+.leap-band::before{content:"";position:absolute;top:0;left:0;width:3px;height:100%;
+  background:linear-gradient(180deg,var(--coral),var(--cyan))}
+.leap-thesis{display:grid;grid-template-columns:1fr auto;gap:46px;align-items:center}
+.leap-q{font-family:var(--disp);font-weight:600;font-size:clamp(1.5rem,3.2vw,2.35rem);
+  line-height:1.18;letter-spacing:-.015em}
+.leap-q .old{color:var(--dim-2);text-decoration:line-through;text-decoration-color:var(--coral);text-decoration-thickness:2px}
+.leap-q .new{color:var(--coral)}
+.counter{text-align:right;flex:none}
+.counter .big{font-family:var(--disp);font-weight:800;font-size:clamp(4rem,9vw,7rem);line-height:.85;
+  letter-spacing:-.04em;background:linear-gradient(180deg,#fff,var(--coral));-webkit-background-clip:text;
+  background-clip:text;-webkit-text-fill-color:transparent}
+.counter .from{font-family:var(--mono);font-size:13px;color:var(--dim);margin-top:8px;letter-spacing:.06em}
+.counter .from s{color:var(--dim-2)}
+.counter .from b{color:var(--cyan)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;margin-top:46px;
+  border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--line)}
+.stat{background:var(--ink-1);padding:28px 26px}
+.stat .n{font-family:var(--disp);font-weight:700;font-size:2.5rem;letter-spacing:-.03em;line-height:1}
+.stat .n .u{font-size:1.1rem;color:var(--coral);margin-left:3px}
+.stat .l{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-top:12px}
+
+/* ============================================================= FEATURES */
+.features{padding:96px 0}
+.fgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+.fcard{
+  background:linear-gradient(180deg,var(--ink-1),var(--ink));border:1px solid var(--line);
+  border-radius:7px;padding:30px 28px 28px;position:relative;overflow:hidden;transition:.3s;
+}
+.fcard::before{content:"";position:absolute;top:0;left:24px;right:24px;height:1px;
+  background:linear-gradient(90deg,transparent,var(--accent,var(--coral)),transparent);opacity:.6}
+.fcard:hover{border-color:var(--line-2);transform:translateY(-3px);
+  box-shadow:0 30px 60px -30px #000,0 0 40px -20px var(--accent,var(--coral))}
+.fcard .ico{width:46px;height:46px;border:1px solid var(--line-2);border-radius:6px;
+  display:grid;place-items:center;color:var(--accent,var(--coral));margin-bottom:22px;background:rgba(255,255,255,.02)}
+.fcard h3{font-family:var(--disp);font-weight:700;font-size:1.4rem;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px}
+.fcard h3 .tag{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--accent);
+  border:1px solid currentColor;border-radius:2px;padding:2px 6px;text-transform:uppercase;opacity:.85}
+.fcard p{color:var(--dim);margin-top:14px;font-size:.98rem}
+.fcard ul{list-style:none;margin-top:18px;display:flex;flex-wrap:wrap;gap:7px}
+.fcard li{font-family:var(--mono);font-size:11.5px;color:#B7BCC6;border:1px solid var(--line);
+  border-radius:3px;padding:5px 9px;background:rgba(255,255,255,.02)}
+.fcard li b{color:var(--accent);font-weight:500}
+
+/* ============================================================= COMPARE */
+.compare{padding:96px 0}
+.cmp-wrap{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--ink-1)}
+.cmp-head{display:grid;grid-template-columns:1.6fr 1fr 1fr;background:var(--ink-2);border-bottom:1px solid var(--line)}
+.cmp-head>div{padding:20px 24px;font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase}
+.cmp-head .h-cap{color:var(--dim)}
+.cmp-head .h-orig{color:var(--dim-2);border-left:1px solid var(--line)}
+.cmp-head .h-fork{color:var(--coral);border-left:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(255,84,54,.1),transparent);position:relative}
+.cmp-head .h-fork b{display:block;font-size:9px;color:var(--cyan);margin-top:3px;letter-spacing:.14em}
+.cmp-group{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--cyan);padding:16px 24px 8px;background:rgba(52,229,200,.03);border-top:1px solid var(--line)}
+.row{display:grid;grid-template-columns:1.6fr 1fr 1fr;border-top:1px solid var(--line);transition:background .2s}
+.row:hover{background:rgba(255,255,255,.018)}
+.row>div{padding:15px 24px;display:flex;align-items:center;font-size:.95rem}
+.row .cap{color:var(--text);font-weight:500;gap:0}
+.row .cap small{display:block;color:var(--dim-2);font-family:var(--mono);font-size:11px;font-weight:400;margin-top:2px;letter-spacing:.02em}
+.row .orig,.row .fork{border-left:1px solid var(--line);font-family:var(--mono);font-size:12.5px;gap:9px}
+.pill{display:inline-flex;align-items:center;gap:7px}
+.pill::before{content:"";width:8px;height:8px;border-radius:50%;flex:none}
+.no{color:var(--dim-2)}
+.no::before{background:transparent;border:1px solid var(--dim-2)}
+.partial{color:var(--amber)}
+.partial::before{background:var(--amber);box-shadow:0 0 8px rgba(255,182,39,.5)}
+.yes{color:var(--cyan)}
+.yes::before{background:var(--cyan);box-shadow:0 0 8px var(--cyan-glow)}
+.row .fork{color:#D7DBE2;background:linear-gradient(90deg,rgba(255,84,54,.04),transparent)}
+
+/* ============================================================= HOW */
+.how{padding:96px 0}
+.flow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:34px}
+.node{border:1px solid var(--line);border-radius:7px;background:var(--ink-1);padding:22px;position:relative}
+.node .role{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--coral)}
+.node h4{font-family:var(--disp);font-weight:700;font-size:1.15rem;margin:8px 0 6px}
+.node p{color:var(--dim);font-size:.88rem}
+.node .pin{position:absolute;top:18px;right:18px;font-family:var(--mono);font-size:10px;color:var(--dim-2)}
+.flow .node:not(:last-child)::after{content:"→";position:absolute;right:-13px;top:50%;transform:translateY(-50%);
+  color:var(--coral);font-size:18px;z-index:3}
+.how-detail{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.det{border:1px solid var(--line);border-left:2px solid var(--cyan);border-radius:0 6px 6px 0;
+  background:rgba(255,255,255,.015);padding:22px 24px}
+.det h5{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--cyan);text-transform:uppercase;margin-bottom:10px}
+.det p{color:var(--dim);font-size:.93rem}
+.det code{font-family:var(--mono);font-size:.86em;color:var(--text);background:rgba(255,255,255,.06);
+  padding:1px 6px;border-radius:3px}
+
+/* ============================================================= TOOLS */
+.tools{padding:96px 0}
+.tcat{display:grid;grid-template-columns:repeat(2,1fr);gap:20px}
+.tcol h4{font-family:var(--mono);font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--dim);padding-bottom:13px;border-bottom:1px solid var(--line);margin-bottom:6px;
+  display:flex;justify-content:space-between}
+.tcol h4 span{color:var(--coral)}
+.tool{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--line)}
+.tool:last-child{border-bottom:0}
+.tool code{font-family:var(--mono);font-size:13px;color:var(--text);font-weight:500}
+.tool .desc{color:var(--dim-2);font-size:.85rem;margin-left:auto;text-align:right;max-width:54%}
+.flag{font-family:var(--mono);font-size:9px;letter-spacing:.1em;padding:2px 6px;border-radius:2px;flex:none;text-transform:uppercase}
+.flag.new{color:var(--cyan);border:1px solid var(--cyan);box-shadow:0 0 12px -4px var(--cyan-glow)}
+.flag.up{color:var(--amber);border:1px solid var(--amber)}
+.flag.base{color:var(--dim-2);border:1px solid var(--line-2)}
+
+/* ============================================================= DEMO */
+.demo{padding:96px 0}
+.demo-card{border:1px solid var(--line);border-radius:9px;overflow:hidden;
+  background:linear-gradient(180deg,var(--ink-1),var(--ink))}
+.demo-top{padding:22px 26px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;
+  font-family:var(--mono);font-size:12px;color:var(--dim)}
+.demo-top .dots{display:flex;gap:6px}
+.demo-top .dots i{width:11px;height:11px;border-radius:50%;display:inline-block}
+.demo-steps{display:grid;grid-template-columns:repeat(3,1fr)}
+.step{padding:28px 26px;border-right:1px solid var(--line);position:relative}
+.step:last-child{border-right:0}
+.step .si{font-family:var(--mono);font-size:11px;color:var(--coral);letter-spacing:.1em}
+.step h5{font-family:var(--disp);font-weight:700;font-size:1.12rem;margin:10px 0 8px}
+.step p{color:var(--dim);font-size:.9rem}
+.step .calls{margin-top:14px;display:flex;flex-direction:column;gap:6px}
+.step .calls code{font-family:var(--mono);font-size:11px;color:var(--cyan);
+  background:rgba(52,229,200,.06);border:1px solid rgba(52,229,200,.15);border-radius:3px;padding:4px 8px;width:fit-content}
+.demo-foot{padding:22px 26px;border-top:1px solid var(--line);font-style:italic;color:#C3C7CF;font-size:1rem}
+.demo-foot b{color:var(--coral);font-style:normal}
+
+/* ============================================================= START */
+.start{padding:96px 0}
+.steps3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:32px}
+.s3{border:1px solid var(--line);border-radius:7px;padding:28px 26px;background:var(--ink-1);position:relative;overflow:hidden}
+.s3 .num{font-family:var(--disp);font-weight:800;font-size:3.2rem;color:var(--ink-3);line-height:.8;
+  position:absolute;top:14px;right:18px;-webkit-text-stroke:1px var(--line-2)}
+.s3 h5{font-family:var(--disp);font-weight:700;font-size:1.2rem;margin-bottom:10px;position:relative}
+.s3 p{color:var(--dim);font-size:.95rem;position:relative}
+.s3 p code{font-family:var(--mono);font-size:.85em;color:var(--cyan)}
+.codeblock{background:#07080A;border:1px solid var(--line);border-radius:6px;padding:20px 22px;
+  font-family:var(--mono);font-size:12.5px;line-height:1.9;overflow-x:auto;position:relative}
+.codeblock .cmt{color:var(--dim-2)}
+.codeblock .fn{color:var(--coral)}
+.codeblock .st{color:var(--cyan)}
+.copy{position:absolute;top:12px;right:12px;font-family:var(--mono);font-size:10.5px;color:var(--dim);
+  border:1px solid var(--line-2);background:var(--ink);border-radius:3px;padding:5px 9px;cursor:pointer;transition:.2s}
+.copy:hover{color:var(--text);border-color:var(--text)}
+
+/* ============================================================= ROADMAP */
+.road{padding:96px 0}
+.road-list{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.ritem{border:1px dashed var(--line-2);border-radius:7px;padding:26px 24px;background:rgba(255,255,255,.012)}
+.ritem .rk{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--amber);display:flex;align-items:center;gap:8px}
+.ritem .rk::before{content:"◇";color:var(--amber)}
+.ritem h5{font-family:var(--disp);font-weight:700;font-size:1.18rem;margin:12px 0 8px}
+.ritem p{color:var(--dim);font-size:.92rem}
+
+/* ============================================================= CTA + FOOTER */
+.bigcta{padding:96px 0 70px}
+.bigcta-in{border:1px solid var(--line-2);border-radius:12px;padding:64px 48px;text-align:center;position:relative;
+  overflow:hidden;background:radial-gradient(120% 140% at 50% -10%,rgba(255,84,54,.12),transparent 60%)}
+.bigcta h2{font-family:var(--disp);font-weight:800;letter-spacing:-.03em;line-height:1;
+  font-size:clamp(2.2rem,5.5vw,4rem)}
+.bigcta p{color:var(--dim);margin:20px auto 34px;max-width:54ch}
+.bigcta .hero-cta{justify-content:center}
+.bigcta .reticle-lg{position:absolute;inset:0;pointer-events:none;opacity:.4}
+
+footer{border-top:1px solid var(--line);padding:54px 0 42px;position:relative;z-index:2}
+.foot-grid{display:grid;grid-template-columns:2fr 1fr 1fr;gap:40px;margin-bottom:42px}
+.foot-grid h6{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim-2);margin-bottom:16px}
+.foot-grid a{display:block;color:var(--dim);font-size:.92rem;padding:5px 0;transition:color .2s}
+.foot-grid a:hover{color:var(--coral)}
+.foot-about p{color:var(--dim);font-size:.92rem;max-width:42ch;margin-top:14px}
+.warn{border:1px solid rgba(255,182,39,.25);background:rgba(255,182,39,.04);border-radius:6px;
+  padding:16px 18px;font-size:.85rem;color:#C9C4B5;margin-bottom:34px;display:flex;gap:12px}
+.warn b{color:var(--amber)}
+.foot-bot{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px;
+  padding-top:26px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11.5px;color:var(--dim-2)}
+.foot-bot a{color:var(--dim)}
+.foot-bot a:hover{color:var(--coral)}
+
+/* ============================================================= REVEAL */
+.rv{opacity:0;transform:translateY(26px);transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+.rv.in{opacity:1;transform:none}
+.rv.d1{transition-delay:.08s}.rv.d2{transition-delay:.16s}.rv.d3{transition-delay:.24s}.rv.d4{transition-delay:.32s}
+
+/* ============================================================= RESPONSIVE */
+@media(max-width:920px){
+  .nav-links,.nav-cta{display:none}
+  .burger{display:block}
+  .hero-grid{grid-template-columns:1fr;gap:44px}
+  .leap-thesis{grid-template-columns:1fr;gap:28px;text-align:left}
+  .counter{text-align:left}
+  .stats{grid-template-columns:repeat(2,1fr)}
+  .fgrid,.how-detail,.tcat{grid-template-columns:1fr}
+  .flow{grid-template-columns:1fr;gap:30px}
+  .flow .node::after{content:"↓";right:50%;top:auto;bottom:-25px;transform:translateX(50%)}
+  .demo-steps,.steps3,.road-list{grid-template-columns:1fr}
+  .step{border-right:0;border-bottom:1px solid var(--line)}
+  .cmp-head,.row{grid-template-columns:1.3fr .8fr .8fr}
+  .row>div{padding:13px 14px;font-size:.86rem}
+  .cmp-head>div{padding:14px}
+  .row .cap small{display:none}
+  .foot-grid{grid-template-columns:1fr 1fr}
+  .foot-about{grid-column:1/-1}
+}
+@media(max-width:560px){
+  .wrap{padding:0 18px}
+  .stats{grid-template-columns:1fr}
+  .leap-band,.bigcta-in{padding:34px 22px}
+  .tool .desc{display:none}
+}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.rv{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="glow-orb orb-1"></div>
+<div class="glow-orb orb-2"></div>
+<div class="grain"></div>
+<div class="scan"></div>
+
+<!-- ===================== NAV ===================== -->
+<header class="nav" id="nav">
+  <div class="nav-in">
+    <a href="#top" class="brand">
+      <svg class="mark" viewBox="0 0 32 32" fill="none">
+        <rect x="1.5" y="1.5" width="29" height="29" rx="4" stroke="#FF5436" stroke-width="1.5"/>
+        <path d="M16 7v18M7 16h18" stroke="#34E5C8" stroke-width="1.2" opacity=".7"/>
+        <circle cx="16" cy="16" r="5" stroke="#FF5436" stroke-width="2"/>
+        <circle cx="16" cy="16" r="1.6" fill="#FF5436"/>
+      </svg>
+      Studio MCP <small>fork</small>
+    </a>
+    <nav class="nav-links">
+      <a href="#leap">What's new</a>
+      <a href="#features">Capabilities</a>
+      <a href="#compare">Compare</a>
+      <a href="#how">Architecture</a>
+      <a href="#tools">Tools</a>
+      <a href="#start">Install</a>
+    </nav>
+    <a class="nav-cta" href="https://github.com/Kiet1308/studio-rust-mcp-server" target="_blank" rel="noopener">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+      GitHub
+    </a>
+    <button class="burger" id="burger" aria-label="menu">≡</button>
+  </div>
+</header>
+
+<!-- ===================== HERO ===================== -->
+<a id="top"></a>
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="fork-tag rv">
+        <span>FORK OF ROBLOX/STUDIO-RUST-MCP-SERVER</span> · <b>actively developed</b>
+      </div>
+      <h1 class="hero-h rv d1">Your AI doesn't just<br>write the code.<br><span class="lock">It plays the game.</span></h1>
+      <p class="hero-lead rv d2">A drop-in Roblox Studio MCP server that gives <b>any MCP client</b> — Claude, Cursor, Claude Code — real eyes and hands inside Studio. It <b>sees the screen</b>, finds &amp; clicks UI, drives the keyboard and mouse, moves the character, and reports every script error — testing your game <b>end-to-end like a real player</b>.</p>
+      <div class="hero-cta rv d3">
+        <a class="btn btn-primary" href="https://github.com/Kiet1308/studio-rust-mcp-server/releases/latest/download/rbx-studio-mcp.exe">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+          Download for Windows
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/Kiet1308/studio-rust-mcp-server" target="_blank" rel="noopener">
+          Read the docs →
+        </a>
+      </div>
+      <p class="hero-note rv d3">// <b>One self-installing .exe</b> — sets up the Studio plugin &amp; your AI client automatically. macOS: build from source.</p>
+    </div>
+
+    <!-- viewfinder -->
+    <div class="viewfinder rv d2">
+      <div class="vf-corner tl"></div><div class="vf-corner tr"></div>
+      <div class="vf-corner bl"></div><div class="vf-corner br"></div>
+      <div class="vf-top">
+        <span>CAM · PLAY-CLIENT</span>
+        <span class="rec"><span class="dot"></span> REC · AI DRIVING</span>
+      </div>
+      <div class="term" id="term">
+        <div class="reticle"></div>
+      </div>
+      <div class="vf-bot">
+        <span>1280 × 720</span><span>FOV 70°</span><span>VIRTUAL-INPUT: LIVE</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- marquee -->
+  <div class="marquee rv">
+    <div class="mq-track">
+      <span><b>take_screenshot</b> <i>/</i> <b>find_ui</b> <i>/</i> <b>click_ui</b> <i>/</i> <b>click_object</b> <i>/</i> <b>send_key</b> <i>/</i> <b>send_text</b> <i>/</i> <b>mouse_drag</b> <i>/</i> <b>control_character</b> <i>/</i> <b>set_camera</b> <i>/</i> <b>list_prompts</b> <i>/</i> <b>get_errors</b> <i>/</i> <b>wait_for</b> <i>/</i> <b>input_sequence</b> <i>/</i> <b>multi-Studio routing</b> <i>/&nbsp;</i></span>
+      <span aria-hidden="true"><b>take_screenshot</b> <i>/</i> <b>find_ui</b> <i>/</i> <b>click_ui</b> <i>/</i> <b>click_object</b> <i>/</i> <b>send_key</b> <i>/</i> <b>send_text</b> <i>/</i> <b>mouse_drag</b> <i>/</i> <b>control_character</b> <i>/</i> <b>set_camera</b> <i>/</i> <b>list_prompts</b> <i>/</i> <b>get_errors</b> <i>/</i> <b>wait_for</b> <i>/</i> <b>input_sequence</b> <i>/</i> <b>multi-Studio routing</b> <i>/&nbsp;</i></span>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== LEAP ===================== -->
+<section class="leap" id="leap">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="kick">[ 01 — THE LEAP ]</span>
+    </div>
+    <div class="leap-band rv d1">
+      <div class="leap-thesis">
+        <div class="leap-q">
+          The original could run code and insert models.<br>
+          This fork lets your AI <span class="old">read the place</span> <span class="new">actually play it</span> — see, click, type, walk, and verify.
+        </div>
+        <div class="counter">
+          <div class="big" data-count="24">24</div>
+          <div class="from">TOOLS · <s>was 6</s> · <b>+18 new</b></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat rv d1"><div class="n" data-count="24">24</div><div class="l">MCP tools total</div></div>
+      <div class="stat rv d2"><div class="n">+<span data-count="18">18</span></div><div class="l">brand-new capabilities</div></div>
+      <div class="stat rv d3"><div class="n">3<span class="u">×</span></div><div class="l">contexts · edit / server / client</div></div>
+      <div class="stat rv d4"><div class="n">E2E</div><div class="l">play-test like a real player</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FEATURES ===================== -->
+<section class="features" id="features">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="kick">[ 02 — CAPABILITIES ]</span>
+      <h2 class="sec-title">Four new powers,<br>given to your agent.</h2>
+      <p class="sec-sub">Everything from the original is still here. On top of it, the fork adds a full end-to-end play-testing layer — grouped into the things a real tester does: <b>see</b>, <b>act</b>, <b>understand</b>, and <b>orchestrate</b>.</p>
+    </div>
+
+    <div class="fgrid">
+      <!-- SEE -->
+      <div class="fcard brk rv" style="--accent:var(--coral)">
+        <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg></div>
+        <h3>See <span class="tag">vision</span></h3>
+        <p>Capture exactly what the player sees — full viewport or a single cropped UI element, with other UI hidden. Aim the camera at any object first, then look.</p>
+        <ul>
+          <li><b>take_screenshot</b> · viewport / crop / isolate</li>
+          <li><b>set_camera</b> · frame · look_at</li>
+          <li><b>get_ui_tree</b></li>
+          <li><b>find_ui</b> · by text / name / class</li>
+        </ul>
+      </div>
+
+      <!-- CONTROL -->
+      <div class="fcard brk rv d1" style="--accent:var(--cyan)">
+        <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 3l14 9-6 1.5L17 20l-3 1.4-3-6L7 18 6 3Z"/></svg></div>
+        <h3>Act <span class="tag">input</span></h3>
+        <p>Drive the engine's <em>real</em> input pipeline — so GuiButton handlers, InputBegan and ClickDetectors fire exactly as for a human. Click, type, drag, hold keys, and walk.</p>
+        <ul>
+          <li><b>click_ui</b></li><li><b>click_object</b> · 3D</li>
+          <li><b>send_key</b></li><li><b>send_text</b></li>
+          <li><b>mouse_drag</b></li><li><b>control_character</b></li>
+          <li><b>input_sequence</b></li><li><b>list_prompts</b></li>
+        </ul>
+      </div>
+
+      <!-- UNDERSTAND -->
+      <div class="fcard brk rv d2" style="--accent:var(--amber)">
+        <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-4 10.5c.7.7 1 1.2 1 2.5h6c0-1.3.3-1.8 1-2.5A6 6 0 0 0 12 3Z"/></svg></div>
+        <h3>Understand <span class="tag">introspect</span></h3>
+        <p>Know what happened. Structured console entries, full script errors with stack traces and the offending script's path, and a reliable wait-for-condition for stable tests.</p>
+        <ul>
+          <li><b>get_errors</b> · + stack traces</li>
+          <li><b>get_console_output</b> · structured</li>
+          <li><b>wait_for</b></li>
+          <li><b>run_code</b> · edit/server/client</li>
+        </ul>
+      </div>
+
+      <!-- ORCHESTRATE -->
+      <div class="fcard brk rv d3" style="--accent:var(--coral-2)">
+        <div class="ico"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M17.5 14v7M14 17.5h7"/></svg></div>
+        <h3>Orchestrate <span class="tag">infra</span></h3>
+        <p>Run against several Studio windows at once — each AI client driving its own — and never lose input to a minimized window: it auto-restores and retries.</p>
+        <ul>
+          <li><b>list_studio_instances</b></li>
+          <li><b>select_studio_instance</b></li>
+          <li><b>studio_window</b> · auto-restore</li>
+          <li><b>start_stop_play</b></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== COMPARE ===================== -->
+<section class="compare" id="compare">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="kick cy">[ 03 — ORIGINAL vs FORK ]</span>
+      <h2 class="sec-title">What changed, line by line.</h2>
+      <p class="sec-sub">The fork keeps every original capability and rebuilds the experience around live play sessions. Here's the full delta against <b>Roblox/studio-rust-mcp-server</b>.</p>
+    </div>
+
+    <div class="cmp-wrap rv d1">
+      <div class="cmp-head">
+        <div class="h-cap">Capability</div>
+        <div class="h-orig">Original</div>
+        <div class="h-fork">This fork <b>★ improved &amp; new</b></div>
+      </div>
+
+      <div class="cmp-group">// Core — kept &amp; upgraded</div>
+      <div class="row"><div class="cap">Run Luau code<small>make changes &amp; query the place</small></div>
+        <div class="orig"><span class="pill partial">edit only</span></div>
+        <div class="fork"><span class="pill yes">edit · server · client</span></div></div>
+      <div class="row"><div class="cap">Insert Creator Store models</div>
+        <div class="orig"><span class="pill yes">yes</span></div>
+        <div class="fork"><span class="pill yes">yes</span></div></div>
+      <div class="row"><div class="cap">Read console output</div>
+        <div class="orig"><span class="pill partial">plain text</span></div>
+        <div class="fork"><span class="pill yes">structured · incremental · per-level</span></div></div>
+      <div class="row"><div class="cap">Play-mode control</div>
+        <div class="orig"><span class="pill yes">start / stop</span></div>
+        <div class="fork"><span class="pill yes">start / stop · mode-aware</span></div></div>
+
+      <div class="cmp-group">// See — entirely new</div>
+      <div class="row"><div class="cap">Screenshot the game<small>viewport, per-UI crop, isolate</small></div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">take_screenshot</span></div></div>
+      <div class="row"><div class="cap">Inspect the UI hierarchy</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">get_ui_tree</span></div></div>
+      <div class="row"><div class="cap">Search UI by text / name / class</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">find_ui · + occlusion check</span></div></div>
+      <div class="row"><div class="cap">Camera control &amp; auto-framing</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">set_camera</span></div></div>
+
+      <div class="cmp-group">// Act — entirely new</div>
+      <div class="row"><div class="cap">Click UI through real input<small>handlers fire like a human's</small></div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">click_ui · occlusion-aware</span></div></div>
+      <div class="row"><div class="cap">Click 3D objects (ClickDetectors)</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">click_object</span></div></div>
+      <div class="row"><div class="cap">Keyboard &amp; text input</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">send_key · send_text</span></div></div>
+      <div class="row"><div class="cap">Mouse move / drag / aim</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">mouse_move · mouse_drag</span></div></div>
+      <div class="row"><div class="cap">Character control (walk / jump / move_to)</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">control_character</span></div></div>
+      <div class="row"><div class="cap">ProximityPrompt discovery</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">list_prompts</span></div></div>
+      <div class="row"><div class="cap">Timed multi-step input combos</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">input_sequence</span></div></div>
+
+      <div class="cmp-group">// Understand &amp; orchestrate — new</div>
+      <div class="row"><div class="cap">Script errors + stack traces</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">get_errors</span></div></div>
+      <div class="row"><div class="cap">Wait-for-condition</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">wait_for</span></div></div>
+      <div class="row"><div class="cap">Multiple Studio windows at once</div>
+        <div class="orig"><span class="pill no">single</span></div>
+        <div class="fork"><span class="pill yes">list / select_studio_instance</span></div></div>
+      <div class="row"><div class="cap">OS window auto-restore</div>
+        <div class="orig"><span class="pill no">none</span></div>
+        <div class="fork"><span class="pill yes">studio_window</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== HOW ===================== -->
+<section class="how" id="how">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="kick">[ 04 — ARCHITECTURE ]</span>
+      <h2 class="sec-title">How it reaches into a<br>live play session.</h2>
+      <p class="sec-sub">Every DataModel — edit, play-server, play-client — runs its own plugin instance and long-polls the Rust server with a <b>role tag</b>, so commands route to the right context. The client can't speak HTTP, so the server relays through a chunked RemoteEvent bridge.</p>
+    </div>
+
+    <div class="flow rv d1">
+      <div class="node"><span class="pin">role=edit</span><div class="role">DataModel · Edit</div><h4>Edit plugin</h4><p>Toolbar, place edits, and the privileged image read-back. Long-polls over HTTP.</p></div>
+      <div class="node"><span class="pin">role=server</span><div class="role">DataModel · Play&nbsp;Server</div><h4>Server plugin</h4><p>Runs server code and <em>relays</em> on the client's behalf — the client has no HttpService.</p></div>
+      <div class="node"><span class="pin">role=client</span><div class="role">DataModel · Play&nbsp;Client</div><h4>Client plugin</h4><p>Where the player lives: virtual input, screenshots, PlayerGui, character.</p></div>
+    </div>
+
+    <div class="how-detail">
+      <div class="det rv"><h5>// Real input, not fake events</h5><p>Input uses <code>UserInputService:CreateVirtualInput()</code> — the engine's actual pipeline. <code>SendKey</code>, <code>SendMouseButton</code>, <code>SendMousePosition</code> &amp; <code>SendMouseDelta</code> mean WASD walks the character and clicks fire <code>.Activated</code>.</p></div>
+      <div class="det rv d1"><h5>// Pixels never cross the relay</h5><p>Screenshots capture on the rendering DataModel via <code>CaptureScreenshot()</code>; the temp contentId is read back as pixels on the edit DataModel with <code>CreateEditableImageAsync</code> — so multi-MB image data never touches the bridge.</p></div>
+      <div class="det rv"><h5>// Clicks are hit-tested first</h5><p><code>GetGuiObjectsAtPosition</code> + a ZIndex/DisplayOrder render-order check finds the element that would <em>actually</em> receive the click. A surprise popup fails the call by name instead of swallowing the input.</p></div>
+      <div class="det rv d1"><h5>// Survives a minimized window</h5><p>Studio pauses rendering when minimized or covered, silently dropping input. The server detects the "not rendering" state, restores the window at the OS level, and retries the command once.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== TOOLS ===================== -->
+<section class="tools" id="tools">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="kick cy">[ 05 — TOOL CATALOG ]</span>
+      <h2 class="sec-title">All 24 tools.</h2>
+      <p class="sec-sub">
+        <span class="flag base" style="vertical-align:middle">BASE</span> from the original ·
+        <span class="flag up" style="vertical-align:middle">UP</span> upgraded ·
+        <span class="flag new" style="vertical-align:middle">NEW</span> added by the fork.
+      </p>
+    </div>
+
+    <div class="tcat">
+      <div class="tcol rv">
+        <h4>Core &amp; execution <span>6</span></h4>
+        <div class="tool"><span class="flag up">UP</span><code>run_code</code><span class="desc">now runs in edit / server / client</span></div>
+        <div class="tool"><span class="flag base">BASE</span><code>insert_model</code><span class="desc">Creator Store model insert</span></div>
+        <div class="tool"><span class="flag up">UP</span><code>get_console_output</code><span class="desc">structured, incremental, per-level</span></div>
+        <div class="tool"><span class="flag base">BASE</span><code>start_stop_play</code><span class="desc">start / stop / run server</span></div>
+        <div class="tool"><span class="flag base">BASE</span><code>run_script_in_play_mode</code><span class="desc">one-shot test script</span></div>
+        <div class="tool"><span class="flag base">BASE</span><code>get_studio_mode</code><span class="desc">edit / play / server</span></div>
+      </div>
+
+      <div class="tcol rv d1">
+        <h4>See &amp; understand <span>6</span></h4>
+        <div class="tool"><span class="flag new">NEW</span><code>take_screenshot</code><span class="desc">viewport / crop / isolate</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>get_ui_tree</code><span class="desc">live PlayerGui hierarchy</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>find_ui</code><span class="desc">search + covered_by</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>set_camera</code><span class="desc">frame / look_at / restore</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>get_errors</code><span class="desc">errors + stack traces</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>wait_for</code><span class="desc">poll a Luau condition</span></div>
+      </div>
+
+      <div class="tcol rv">
+        <h4>Act / input <span>9</span></h4>
+        <div class="tool"><span class="flag new">NEW</span><code>click_ui</code><span class="desc">occlusion-aware UI click</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>click_object</code><span class="desc">3D parts &amp; models</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>send_key</code><span class="desc">tap / hold / press / release</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>send_text</code><span class="desc">type into TextBoxes</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>mouse_move</code><span class="desc">hover effects</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>mouse_drag</code><span class="desc">aim / slider / drag-drop</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>control_character</code><span class="desc">move_to / walk / jump</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>input_sequence</code><span class="desc">timed combos</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>list_prompts</code><span class="desc">nearby ProximityPrompts</span></div>
+      </div>
+
+      <div class="tcol rv d1">
+        <h4>Orchestrate / multi-Studio <span>3</span></h4>
+        <div class="tool"><span class="flag new">NEW</span><code>list_studio_instances</code><span class="desc">every connected window</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>select_studio_instance</code><span class="desc">route per AI client</span></div>
+        <div class="tool"><span class="flag new">NEW</span><code>studio_window</code><span class="desc">status / restore (OS-level)</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== DEMO ===================== -->
+<section class="demo">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="kick">[ 06 — REAL RUN ]</span>
+      <h2 class="sec-title">Claude played a farming<br>game. Hands-free.</h2>
+      <p class="sec-sub">An actual end-to-end session: the AI hit Play, talked to an NPC, bought seeds, searched its inventory, walked to an empty plot to plant — then checked for script errors. <b>It never touched the mouse.</b></p>
+    </div>
+
+    <div class="demo-card rv d1">
+      <div class="demo-top">
+        <span class="dots"><i style="background:var(--coral)"></i><i style="background:var(--amber)"></i><i style="background:var(--cyan)"></i></span>
+        session · garden-sim.rbxl · play-client
+      </div>
+      <div class="demo-steps">
+        <div class="step">
+          <div class="si">STEP 01 — ENTER</div>
+          <h5>Boot &amp; spawn</h5>
+          <p>Start play mode and wait until the character actually exists before touching anything.</p>
+          <div class="calls"><code>start_stop_play</code><code>wait_for(Character)</code></div>
+        </div>
+        <div class="step">
+          <div class="si">STEP 02 — SHOP</div>
+          <h5>Buy carrot seeds</h5>
+          <p>Find the Shop button under deep UI, click it, search the list, and purchase.</p>
+          <div class="calls"><code>find_ui("Shop")</code><code>click_ui · send_text</code></div>
+        </div>
+        <div class="step">
+          <div class="si">STEP 03 — VERIFY</div>
+          <h5>Walk &amp; check errors</h5>
+          <p>Move to an empty plot, screenshot the result, and confirm nothing threw.</p>
+          <div class="calls"><code>control_character</code><code>get_errors → 0</code></div>
+        </div>
+      </div>
+      <div class="demo-foot">
+        “Để Claude tự vào game farming — tự bấm Play, mua hạt giống, đi trồng cây, rồi tự kiểm tra error. <b>Toàn bộ không đụng chuột lần nào.</b>”
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== START ===================== -->
+<section class="start" id="start">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="kick cy">[ 07 — QUICK START ]</span>
+      <h2 class="sec-title">Running in 3 steps.</h2>
+    </div>
+
+    <div class="steps3">
+      <div class="s3 rv"><div class="num">1</div><h5>Download</h5><p>Grab <code>rbx-studio-mcp.exe</code> from the latest release and run it once.</p></div>
+      <div class="s3 rv d1"><div class="num">2</div><h5>It self-installs</h5><p>The installer adds the Studio plugin and configures <code>Claude</code> / <code>Cursor</code> automatically.</p></div>
+      <div class="s3 rv d2"><div class="num">3</div><h5>Restart &amp; go</h5><p>Restart your AI client and Roblox Studio. Open a place and prompt away.</p></div>
+    </div>
+
+    <div class="codeblock rv d1">
+      <button class="copy" data-copy="claude mcp add --transport stdio Roblox_Studio -- /path/to/rbx-studio-mcp --stdio">COPY</button>
+<span class="cmt"># macOS / manual: build from source, then register the server</span>
+<span class="fn">cargo</span> run   <span class="cmt"># builds server + plugin, wires up Claude Desktop</span>
+
+<span class="cmt"># or add it to any MCP client by hand:</span>
+<span class="fn">claude</span> mcp add --transport stdio Roblox_Studio -- <span class="st">/path/to/rbx-studio-mcp</span> --stdio
+    </div>
+  </div>
+</section>
+
+<!-- ===================== ROADMAP ===================== -->
+<section class="road" id="roadmap">
+  <div class="wrap">
+    <div class="sec-head rv">
+      <span class="kick">[ 08 — ROADMAP ]</span>
+      <h2 class="sec-title">Still being built.</h2>
+      <p class="sec-sub">This is an actively developed fork — the original is no longer maintained by Roblox. On the way:</p>
+    </div>
+    <div class="road-list">
+      <div class="ritem rv"><div class="rk">Phase 2</div><h5>Multiplayer</h5><p>Drive several play clients at once for true multiplayer testing — one agent per player.</p></div>
+      <div class="ritem rv d1"><div class="rk">Planned</div><h5>Record &amp; replay</h5><p>Capture an input session and replay it deterministically as a regression test.</p></div>
+      <div class="ritem rv d2"><div class="rk">Planned</div><h5>Automated test reports</h5><p>Turn an end-to-end play-through into a structured pass/fail report with screenshots.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== BIG CTA ===================== -->
+<section class="bigcta">
+  <div class="wrap">
+    <div class="bigcta-in brk rv">
+      <svg class="reticle-lg" viewBox="0 0 400 200" preserveAspectRatio="none"><path d="M0 100h140M260 100h140M200 0v60M200 140v60" stroke="#34E5C8" stroke-width="1" opacity=".4"/><circle cx="200" cy="100" r="40" stroke="#FF5436" stroke-width="1" fill="none" opacity=".4"/></svg>
+      <h2>Give your AI<br>the controller.</h2>
+      <p>Open-source. One <code>.exe</code>. Works with any MCP client. Built for Roblox developers who'd rather let the agent test the game than click through it themselves.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://github.com/Kiet1308/studio-rust-mcp-server/releases/latest/download/rbx-studio-mcp.exe">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14"/></svg>
+          Download for Windows
+        </a>
+        <a class="btn btn-ghost" href="https://github.com/Kiet1308/studio-rust-mcp-server" target="_blank" rel="noopener">View on GitHub →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== FOOTER ===================== -->
+<footer>
+  <div class="wrap">
+    <div class="warn rv">
+      <b>⚠</b>
+      <div><b>Heads up:</b> these tools let an AI client run code and read the contents of the place open in Studio. Use it only with your own projects and AI clients you trust.</div>
+    </div>
+    <div class="foot-grid">
+      <div class="foot-about">
+        <a href="#top" class="brand" style="font-size:18px">
+          <svg class="mark" viewBox="0 0 32 32" fill="none" style="width:28px;height:28px">
+            <rect x="1.5" y="1.5" width="29" height="29" rx="4" stroke="#FF5436" stroke-width="1.5"/>
+            <path d="M16 7v18M7 16h18" stroke="#34E5C8" stroke-width="1.2" opacity=".7"/>
+            <circle cx="16" cy="16" r="5" stroke="#FF5436" stroke-width="2"/><circle cx="16" cy="16" r="1.6" fill="#FF5436"/>
+          </svg>
+          Studio MCP <small>fork</small>
+        </a>
+        <p>A fork of Roblox's <code style="font-family:var(--mono);font-size:.85em;color:var(--dim)">studio-rust-mcp-server</code> that turns any MCP client into a real player — see, click, type, walk, verify.</p>
+      </div>
+      <div>
+        <h6>Project</h6>
+        <a href="https://github.com/Kiet1308/studio-rust-mcp-server" target="_blank" rel="noopener">GitHub repository</a>
+        <a href="https://github.com/Kiet1308/studio-rust-mcp-server/releases/latest" target="_blank" rel="noopener">Latest release</a>
+        <a href="https://github.com/Kiet1308/studio-rust-mcp-server/issues" target="_blank" rel="noopener">Report an issue</a>
+        <a href="https://github.com/Roblox/studio-rust-mcp-server" target="_blank" rel="noopener">Original (upstream)</a>
+      </div>
+      <div>
+        <h6>Built with</h6>
+        <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener">Model Context Protocol</a>
+        <a href="https://claude.ai/download" target="_blank" rel="noopener">Claude Desktop</a>
+        <a href="https://www.cursor.com/" target="_blank" rel="noopener">Cursor</a>
+        <a href="https://create.roblox.com/docs/studio" target="_blank" rel="noopener">Roblox Studio</a>
+      </div>
+    </div>
+    <div class="foot-bot">
+      <span>© 2026 · Studio MCP fork · MIT-licensed · not affiliated with Roblox Corporation</span>
+      <span>Built for Roblox developers · <a href="https://github.com/Kiet1308/studio-rust-mcp-server" target="_blank" rel="noopener">v0.2.0</a></span>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* ---------- nav stuck ---------- */
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('stuck',scrollY>20),{passive:true});
+
+/* ---------- mobile menu (simple smooth scroll fallback) ---------- */
+document.getElementById('burger').addEventListener('click',()=>{
+  document.getElementById('leap').scrollIntoView({behavior:'smooth'});
+});
+
+/* ---------- reveal on scroll ---------- */
+const io=new IntersectionObserver((es)=>{
+  es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});
+},{threshold:.12,rootMargin:'0px 0px -8% 0px'});
+document.querySelectorAll('.rv').forEach(el=>io.observe(el));
+
+/* ---------- count up ---------- */
+const counted=new WeakSet();
+const cio=new IntersectionObserver((es)=>{
+  es.forEach(e=>{
+    if(!e.isIntersecting||counted.has(e.target))return;
+    counted.add(e.target);
+    const el=e.target, end=+el.dataset.count, dur=1100, t0=performance.now();
+    const tick=(t)=>{
+      const p=Math.min(1,(t-t0)/dur), e2=1-Math.pow(1-p,3);
+      el.textContent=Math.round(end*e2);
+      if(p<1)requestAnimationFrame(tick);else el.textContent=end;
+    };
+    requestAnimationFrame(tick);
+  });
+},{threshold:.6});
+document.querySelectorAll('[data-count]').forEach(el=>cio.observe(el));
+
+/* ---------- copy button ---------- */
+document.querySelectorAll('.copy').forEach(b=>{
+  b.addEventListener('click',async()=>{
+    try{await navigator.clipboard.writeText(b.dataset.copy);const o=b.textContent;b.textContent='COPIED ✓';setTimeout(()=>b.textContent=o,1500);}catch(e){}
+  });
+});
+
+/* ---------- hero terminal typing ---------- */
+const term=document.getElementById('term');
+const reticle=term.querySelector('.reticle');
+const lines=[
+  {c:'cmd',h:'<span class="p">▸</span> start_stop_play <span class="arg">mode=start_play</span>'},
+  {c:'ok', h:'  ✓ play session live <span class="c">· client connected</span>'},
+  {c:'cmd',h:'<span class="p">▸</span> wait_for <span class="arg">"Character ~= nil"</span>'},
+  {c:'ok', h:'  ✓ satisfied <span class="c">in 2.4s</span>'},
+  {c:'cmd',h:'<span class="p">▸</span> take_screenshot'},
+  {c:'ok', h:'  ✓ 1280×720 <span class="c">· viewport captured</span>'},
+  {c:'cmd',h:'<span class="p">▸</span> find_ui <span class="arg">text="Shop"</span>'},
+  {c:'ok', h:'  ✓ ShopGui.OpenButton <span class="c">· rect 24,180</span>'},
+  {c:'cmd',h:'<span class="p">▸</span> click_ui <span class="arg">ShopGui.OpenButton</span>'},
+  {c:'ok', h:'  ✓ .Activated fired'},
+  {c:'cmd',h:'<span class="p">▸</span> send_text <span class="arg">"carrot seed"</span>'},
+  {c:'cmd',h:'<span class="p">▸</span> click_ui <span class="arg">Item.Buy</span>'},
+  {c:'ok', h:'  ✓ purchased <span class="c">· coins 250 → 180</span>'},
+  {c:'cmd',h:'<span class="p">▸</span> control_character <span class="arg">move_to (12,4,-30)</span>'},
+  {c:'ok', h:'  ✓ reached empty plot'},
+  {c:'cmd',h:'<span class="p">▸</span> get_errors <span class="arg">context=client</span>'},
+  {c:'ok', h:'  ✓ 0 errors <span class="c">· run clean</span>'},
+];
+let i=0;
+function feed(){
+  if(i>=lines.length){
+    setTimeout(()=>{ // restart loop
+      term.querySelectorAll('.ln').forEach(n=>n.remove());
+      i=0; feed();
+    },4200);
+    return;
+  }
+  const l=lines[i];
+  const div=document.createElement('div');
+  div.className='ln '+l.c;
+  div.innerHTML=l.h;
+  term.appendChild(div);
+  // keep within view: cap visible lines
+  const lns=term.querySelectorAll('.ln');
+  if(lns.length>11)lns[0].remove();
+  i++;
+  setTimeout(feed, l.c==='cmd'?620:480);
+}
+// start after a beat
+setTimeout(feed,700);
+</script>
+</body>
+</html>
