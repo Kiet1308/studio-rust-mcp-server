@@ -91,6 +91,18 @@ fn parse_context(context: Option<&str>) -> Result<TargetRole, String> {
     }
 }
 
+// Validates the run_code execution mode. The plugin treats any non-"execute"
+// value as output mode, but we reject typos here so a misspelled mode does not
+// silently fall back to capturing output.
+fn validate_mode(mode: Option<&str>) -> Result<(), String> {
+    match mode {
+        None | Some("output") | Some("execute") => Ok(()),
+        Some(other) => Err(format!(
+            "Invalid mode '{other}': must be output or execute"
+        )),
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ToolArguments {
     args: ToolArgumentValues,
@@ -324,7 +336,7 @@ impl ServerHandler for RBXStudioServer {
             instructions: Some(
                 "If several Roblox Studio windows are open, tools fail with a list of instances until one is chosen: call list_studio_instances, then select_studio_instance (by place name or placeId). A single open window is used automatically.
 Be aware of the current studio mode before using tools; infer it from context or get_studio_mode.
-Use run_code to query or change the place. It accepts context=edit|server|client; server/client run inside the live play session.
+Use run_code to query or change the place. It accepts context=edit|server|client; server/client run inside the live play session. run_code_from_file does the same but reads the script from a file path on the server machine instead of an inline string.
 Prefer start_stop_play over run_script_in_play_mode; the latter is only for one-shot unit-test code on the server DataModel and resets the session to stop afterwards.
 
 End-to-end play testing (like a real player):
@@ -351,6 +363,34 @@ struct RunCode {
         description = "Where to run the code: edit (default), server, or client. server/client require play mode to be running (see start_stop_play)."
     )]
     context: Option<String>,
+    #[schemars(
+        description = "Execution mode. output (default): print/warn/error are captured and returned together with any returned results. execute: run the code directly without overriding its environment (no getfenv/setfenv) and return no captured output — for applying changes or running a script where you don't need the printed output (prints still reach the console, read them with get_console_output)."
+    )]
+    mode: Option<String>,
+    #[schemars(
+        description = "In output mode, cap the returned output to this many lines (the last N lines are kept, earlier ones noted as omitted). Omit for no limit."
+    )]
+    max_lines: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone)]
+struct RunCodeFromFile {
+    #[schemars(
+        description = "Path to a Luau script file (.luau/.lua) on the machine running this MCP server — the same machine as Studio. Absolute paths are most reliable; relative paths resolve from the server's working directory."
+    )]
+    path: String,
+    #[schemars(
+        description = "Where to run the code: edit (default), server, or client. server/client require play mode to be running (see start_stop_play)."
+    )]
+    context: Option<String>,
+    #[schemars(
+        description = "Execution mode: output (default, captures and returns output) or execute (run directly, no getfenv/setfenv, no captured output). See run_code."
+    )]
+    mode: Option<String>,
+    #[schemars(
+        description = "In output mode, cap the returned output to this many lines (the last N are kept). Omit for no limit."
+    )]
+    max_lines: Option<u32>,
 }
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone)]
 struct InsertModel {
@@ -965,8 +1005,54 @@ impl RBXStudioServer {
             Ok(target) => target,
             Err(msg) => return Ok(CallToolResult::error(vec![Content::text(msg)])),
         };
+        if let Err(msg) = validate_mode(args.mode.as_deref()) {
+            return Ok(CallToolResult::error(vec![Content::text(msg)]));
+        }
         self.generic_tool_run_on(ToolArgumentValues::RunCode(args), target)
             .await
+    }
+
+    #[tool(
+        description = "Reads a Luau script from a file on disk (the machine running this MCP server, same as Studio) and runs it in Roblox Studio, returning the printed output. \
+        Like run_code but the code comes from a file path instead of an inline string — useful for large scripts or running a saved .luau file without pasting its contents. \
+        Use context=server or context=client to run inside a running play session."
+    )]
+    async fn run_code_from_file(
+        &self,
+        Parameters(args): Parameters<RunCodeFromFile>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let target = match parse_context(args.context.as_deref()) {
+            Ok(target) => target,
+            Err(msg) => return Ok(CallToolResult::error(vec![Content::text(msg)])),
+        };
+        if let Err(msg) = validate_mode(args.mode.as_deref()) {
+            return Ok(CallToolResult::error(vec![Content::text(msg)]));
+        }
+        let command = match tokio::fs::read_to_string(&args.path).await {
+            Ok(contents) => contents,
+            Err(err) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Could not read script file {:?}: {err}",
+                    args.path
+                ))]));
+            }
+        };
+        if command.trim().is_empty() {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Script file {:?} is empty.",
+                args.path
+            ))]));
+        }
+        self.generic_tool_run_on(
+            ToolArgumentValues::RunCode(RunCode {
+                command,
+                context: args.context,
+                mode: args.mode,
+                max_lines: args.max_lines,
+            }),
+            target,
+        )
+        .await
     }
 
     #[tool(

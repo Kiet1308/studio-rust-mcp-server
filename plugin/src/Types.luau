@@ -7,6 +7,13 @@ export type RunCodeArgs = {
 	-- Routing hint consumed by the Rust server; present in the payload but
 	-- ignored by the tool itself (it always runs in the DataModel it reaches).
 	context: string?,
+	-- "output" (default): override print/warn/error to capture and return the
+	-- output. "execute": run the chunk directly without touching its
+	-- environment (no getfenv/setfenv) and return no captured output.
+	mode: string?,
+	-- In "output" mode, cap the returned output to this many lines (the last
+	-- N are kept). nil means no limit.
+	max_lines: number?,
 }
 
 export type TestMode = "start_play" | "run_server"

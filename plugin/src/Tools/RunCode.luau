@@ -4,7 +4,30 @@ local Types = require(Main.Types)
 
 local HttpService = game:GetService("HttpService")
 
-local function runCodeWithOutput(command: string): string
+-- Keeps the last `maxLines` lines of captured output, prepending a notice
+-- about how many earlier lines were dropped. The important parts (returned
+-- results, errors) are appended last, so the tail is what we keep.
+local function truncateOutput(output: string, maxLines: number): string
+	if maxLines <= 0 then
+		return output
+	end
+	-- Each entry ends with "\n"; drop one trailing newline for clean splitting.
+	local trimmed = if string.sub(output, -1) == "\n" then string.sub(output, 1, -2) else output
+	if trimmed == "" then
+		return output
+	end
+	local lines = string.split(trimmed, "\n")
+	if #lines <= maxLines then
+		return output
+	end
+	local dropped = #lines - maxLines
+	local kept = table.move(lines, dropped + 1, #lines, 1, {})
+	return string.format("[TRUNCATED] %d earlier line(s) omitted; showing the last %d.\n", dropped, maxLines)
+		.. table.concat(kept, "\n")
+		.. "\n"
+end
+
+local function runCodeWithOutput(command: string, maxLines: number?): string
 	local output = ""
 
 	local function getTableType(arg)
@@ -119,7 +142,21 @@ local function runCodeWithOutput(command: string): string
 		addToOutput("[UNEXPECTED ERROR]", errorMessage)
 	end
 
+	if type(maxLines) == "number" then
+		output = truncateOutput(output, maxLines)
+	end
+
 	return output
+end
+
+-- Pure execute: compile and run the chunk directly without overriding its
+-- environment (no getfenv/setfenv) and without capturing print/warn/error.
+-- Any prints still reach the real console (readable via get_console_output).
+-- Errors propagate to the dispatcher and surface as a tool failure.
+local function runCodePure(command: string): string
+	local chunk = LuauCompile.compile(command, script)
+	chunk()
+	return "Executed (execute mode: output not captured; read prints via get_console_output)."
 end
 
 local function handleRunCode(runCodeArgs: Types.RunCodeArgs): string?
@@ -127,7 +164,11 @@ local function handleRunCode(runCodeArgs: Types.RunCodeArgs): string?
 		error("Missing command in RunCode")
 	end
 
-	return runCodeWithOutput(runCodeArgs.command)
+	if runCodeArgs.mode == "execute" then
+		return runCodePure(runCodeArgs.command)
+	end
+
+	return runCodeWithOutput(runCodeArgs.command, runCodeArgs.max_lines)
 end
 
 return handleRunCode :: Types.ToolFunction
