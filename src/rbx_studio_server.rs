@@ -97,9 +97,7 @@ fn parse_context(context: Option<&str>) -> Result<TargetRole, String> {
 fn validate_mode(mode: Option<&str>) -> Result<(), String> {
     match mode {
         None | Some("output") | Some("execute") => Ok(()),
-        Some(other) => Err(format!(
-            "Invalid mode '{other}': must be output or execute"
-        )),
+        Some(other) => Err(format!("Invalid mode '{other}': must be output or execute")),
     }
 }
 
@@ -341,7 +339,7 @@ Prefer start_stop_play over run_script_in_play_mode; the latter is only for one-
 
 End-to-end play testing (like a real player):
 1. start_stop_play mode=start_play, then wait_for the character: condition='local p = game.Players.LocalPlayer; return p and p.Character ~= nil'.
-2. See the game with take_screenshot (full viewport, or ui_path to crop one UI element, isolate=true to hide other UI, park_mouse=true to keep hover tooltips out). Use set_camera (frame target_path=... auto-fits an object; or set/look_at, then restore) to look at a specific 3D area first.
+2. See the game with take_screenshot (full viewport, or ui_path to crop one UI element, isolate=true to hide other UI, park_mouse=true to keep hover tooltips out; save_to_file=true returns a local file path instead of inline image content). Use set_camera (frame target_path=... auto-fits an object; or set/look_at, then restore) to look at a specific 3D area first.
 3. Find what to interact with: find_ui (search by text/name/class — returns paths, rects, and covered_by when something overlaps), get_ui_tree (full hierarchy), list_prompts (nearby ProximityPrompts with key and hold duration). Then interact: click_ui (path or x/y; fails naming the covering element if a popup would swallow the click — dismiss it or force=true), click_object (3D Parts/Models by workspace path), mouse_drag (aiming, sliders, drag-and-drop; auto-handles locked-cursor camera drags), mouse_move (hover), send_key (W/A/S/D, Space, action=press with duration to hold; triggers in-range ProximityPrompts), send_text (TextBoxes), control_character (move_to/walk/jump/get_state). For timing-sensitive combos run several steps in one input_sequence call.
 4. Verify outcomes with wait_for + take_screenshot + get_console_output (pass since_seq=last_seq from the previous call for only-new entries; level=error to filter) and get_errors (script errors with stack traces, check context=server and context=client) instead of sleeping blindly.
 5. start_stop_play mode=stop when done.
@@ -471,6 +469,10 @@ struct TakeScreenshot {
         description = "Move the pointer to a screen corner before capturing so hover tooltips don't pollute the image. Defaults to false (the pointer state may be part of what you're verifying)."
     )]
     park_mouse: Option<bool>,
+    #[schemars(
+        description = "If true, save the encoded screenshot to a local temp file and return its path instead of returning image content directly. Defaults to false."
+    )]
+    save_to_file: Option<bool>,
 }
 
 // Internal commands used by take_screenshot; not exposed as MCP tools.
@@ -516,6 +518,24 @@ struct ReadReply {
     width: u32,
     height: u32,
     pixels: String,
+}
+
+struct EncodedScreenshot {
+    bytes: Vec<u8>,
+    mime: String,
+    width: u32,
+    height: u32,
+}
+
+enum ScreenshotToolOutput {
+    Inline {
+        data: String,
+        mime: String,
+        meta: String,
+    },
+    File {
+        meta: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema, Clone)]
@@ -919,7 +939,7 @@ fn encode_screenshot(
     read: ReadReply,
     max_dimension: u32,
     format: &str,
-) -> Result<(String, String, u32, u32), String> {
+) -> Result<EncodedScreenshot, String> {
     use base64::Engine;
 
     let raw = base64::engine::general_purpose::STANDARD
@@ -938,9 +958,7 @@ fn encode_rgba(
     image: image::RgbaImage,
     max_dimension: u32,
     format: &str,
-) -> Result<(String, String, u32, u32), String> {
-    use base64::Engine;
-
+) -> Result<EncodedScreenshot, String> {
     let (width, height) = image.dimensions();
     let longest = width.max(height);
     let image = if longest > max_dimension {
@@ -976,12 +994,62 @@ fn encode_rgba(
         "image/png"
     };
 
-    Ok((
-        base64::engine::general_purpose::STANDARD.encode(&encoded),
-        mime.to_string(),
-        out_width,
-        out_height,
-    ))
+    Ok(EncodedScreenshot {
+        bytes: encoded,
+        mime: mime.to_string(),
+        width: out_width,
+        height: out_height,
+    })
+}
+
+fn save_screenshot_file(encoded: &EncodedScreenshot, format: &str) -> Result<String, String> {
+    let extension = if format == "jpeg" { "jpg" } else { "png" };
+    let dir = std::env::temp_dir().join("roblox-studio-mcp-screenshots");
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "Failed to create screenshot output directory {}: {e}",
+            dir.display()
+        )
+    })?;
+    let path = dir.join(format!("screenshot-{}.{}", Uuid::new_v4(), extension));
+    std::fs::write(&path, &encoded.bytes)
+        .map_err(|e| format!("Failed to write screenshot file {}: {e}", path.display()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn finish_screenshot_output(
+    encoded: EncodedScreenshot,
+    mut meta: serde_json::Value,
+    format: &str,
+    save_to_file: bool,
+) -> Result<ScreenshotToolOutput, String> {
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert("width".to_string(), serde_json::json!(encoded.width));
+        obj.insert("height".to_string(), serde_json::json!(encoded.height));
+        obj.insert("mime".to_string(), serde_json::json!(encoded.mime.clone()));
+    }
+
+    if save_to_file {
+        let path = save_screenshot_file(&encoded, format)?;
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert("delivery".to_string(), serde_json::json!("file"));
+            obj.insert("path".to_string(), serde_json::json!(path));
+        }
+        return Ok(ScreenshotToolOutput::File {
+            meta: meta.to_string(),
+        });
+    }
+
+    use base64::Engine;
+    let data = base64::engine::general_purpose::STANDARD.encode(&encoded.bytes);
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert("delivery".to_string(), serde_json::json!("inline_image"));
+    }
+    Ok(ScreenshotToolOutput::Inline {
+        data,
+        mime: encoded.mime,
+        meta: meta.to_string(),
+    })
 }
 
 #[tool_router]
@@ -1143,6 +1211,7 @@ impl RBXStudioServer {
         In play mode this captures the running game exactly as the player sees it (3D world plus all UI). \
         Use ui_path to capture a single ScreenGui or GuiObject cropped to its bounds (path relative to PlayerGui during play, e.g. 'ShopGui.MainFrame'); \
         add isolate=true to hide all other UI while capturing it. \
+        Set save_to_file=true to save the screenshot to a local temp file and return its path instead of inline image content. \
         Requires the Studio window to be visible (not minimized)."
     )]
     async fn take_screenshot(
@@ -1150,10 +1219,15 @@ impl RBXStudioServer {
         Parameters(args): Parameters<TakeScreenshot>,
     ) -> Result<CallToolResult, ErrorData> {
         match self.take_screenshot_impl(args).await {
-            Ok((data, mime, meta)) => Ok(CallToolResult::success(vec![
-                Content::image(data, mime),
-                Content::text(meta),
-            ])),
+            Ok(ScreenshotToolOutput::Inline { data, mime, meta }) => {
+                Ok(CallToolResult::success(vec![
+                    Content::image(data, mime),
+                    Content::text(meta),
+                ]))
+            }
+            Ok(ScreenshotToolOutput::File { meta }) => {
+                Ok(CallToolResult::success(vec![Content::text(meta)]))
+            }
             Err(message) => Ok(CallToolResult::error(vec![Content::text(message)])),
         }
     }
@@ -1161,25 +1235,24 @@ impl RBXStudioServer {
     async fn take_screenshot_impl(
         &self,
         args: TakeScreenshot,
-    ) -> Result<(String, String, String), String> {
+    ) -> Result<ScreenshotToolOutput, String> {
         let format = match args.format.as_deref() {
             None | Some("png") => "png",
             Some("jpeg") | Some("jpg") => "jpeg",
             Some(other) => return Err(format!("Invalid format '{other}': must be png or jpeg")),
         };
         let max_dimension = args.max_dimension.unwrap_or(1280).clamp(64, 4096);
+        let save_to_file = args.save_to_file.unwrap_or(false);
 
         match self.capture_via_engine(&args).await {
             Ok((read, mode, capture_role, viewport)) => {
-                let (data, mime, width, height) = tokio::task::spawn_blocking(move || {
+                let encoded = tokio::task::spawn_blocking(move || {
                     encode_screenshot(read, max_dimension, format)
                 })
                 .await
                 .map_err(|e| format!("Image encoding task failed: {e}"))??;
 
                 let meta = serde_json::json!({
-                    "width": width,
-                    "height": height,
                     // Viewport size in the coordinate system used by
                     // get_ui_tree rects and click_ui positions. To click a
                     // pixel seen in this image, scale by viewport/image size.
@@ -1189,10 +1262,9 @@ impl RBXStudioServer {
                     "source": "CaptureService",
                     "ui_path": args.ui_path,
                     "isolate": args.isolate.unwrap_or(false),
-                })
-                .to_string();
+                });
 
-                Ok((data, mime.to_string(), meta))
+                finish_screenshot_output(encoded, meta, format, save_to_file)
             }
             Err(engine_error) => {
                 // The in-engine path has a known failure mode (capture callback
@@ -1210,23 +1282,20 @@ impl RBXStudioServer {
                         })?;
 
                 let title = captured.title.clone();
-                let (data, mime, width, height) = tokio::task::spawn_blocking(move || {
+                let encoded = tokio::task::spawn_blocking(move || {
                     encode_rgba(captured.image, max_dimension, format)
                 })
                 .await
                 .map_err(|e| format!("Image encoding task failed: {e}"))??;
 
                 let meta = serde_json::json!({
-                    "width": width,
-                    "height": height,
                     "source": "os_window",
                     "window_title": title,
                     "note": "Fallback capture of the whole Studio window (includes Studio chrome; ui_path crop and viewport coordinates do not apply).",
                     "engine_error": engine_error,
-                })
-                .to_string();
+                });
 
-                Ok((data, mime.to_string(), meta))
+                finish_screenshot_output(encoded, meta, format, save_to_file)
             }
         }
     }
